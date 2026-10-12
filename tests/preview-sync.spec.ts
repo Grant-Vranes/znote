@@ -98,9 +98,57 @@ test("user reading survives a render and later height changes above the reading 
     (window as any).cursorSync(source, 1);
   }, { source, rendered: result(html.replace("paragraph 0", "changed paragraph 0")) });
   await expect.poll(() => page.frameLocator("iframe").locator("p").nth(tracked.index).evaluate(element => element.getBoundingClientRect().top)).toBeCloseTo(tracked.top, 0);
+  // Later layout changes should preserve the anchor once scrolling is idle.
+  await page.waitForTimeout(300);
   await page.frameLocator("iframe").locator("p").first().evaluate(element => { element.style.height = "500px"; });
   await expect.poll(() => page.frameLocator("iframe").locator("p").nth(tracked.index).evaluate(element => element.getBoundingClientRect().top)).toBeCloseTo(tracked.top, 0);
 });
+
+for (const input of ["wheel", "touch", "keyboard", "pointer"] as const) {
+  test(`layout changes yield to active ${input} scrolling and resume anchoring when idle`, async ({ page }) => {
+    const source = Array.from({ length: 100 }, (_, i) => "paragraph " + i).join("\n\n");
+    const html = Array.from({ length: 100 }, (_, i) => `<p>paragraph ${i}</p>`).join("");
+    await page.evaluate(async ({ source, rendered }) => {
+      await (window as any).renderResult(rendered, source);
+      (window as any).enableScrollSync(source);
+    }, { source, rendered: result(html) });
+    const body = page.frameLocator("iframe").locator("body");
+    await body.hover();
+    await page.mouse.wheel(0, 1400);
+    await expect.poll(() => page.evaluate(() => (window as any).scrollLines.length)).toBeGreaterThan(0);
+    const expected = await body.evaluate((_, input) => {
+      const event = input === "wheel" ? new WheelEvent("wheel", { deltaY: 120 })
+        : input === "touch" ? new Event("touchmove")
+        : input === "keyboard" ? new KeyboardEvent("keydown", { key: "PageDown" })
+        : new PointerEvent("pointerdown");
+      document.dispatchEvent(event);
+      // Reproduce native scrolling and deferred content growth in the same
+      // frame, before the scroll listener has refreshed the reading anchor.
+      window.scrollBy(0, 120);
+      document.querySelector("p")!.style.height = "500px";
+      return window.scrollY;
+    }, input);
+    await page.waitForTimeout(100);
+    expect(await body.evaluate(() => window.scrollY)).toBeCloseTo(expected, 0);
+    if (input === "pointer") {
+      // A held scrollbar must remain in charge beyond the normal idle timeout.
+      await page.waitForTimeout(300);
+      await body.evaluate(() => { document.querySelector("p")!.style.height = "600px"; });
+      await page.waitForTimeout(100);
+      expect(await body.evaluate(() => window.scrollY)).toBeCloseTo(expected, 0);
+      // Release outside the iframe, as can happen while dragging its scrollbar.
+      await page.evaluate(() => window.dispatchEvent(new PointerEvent("pointerup")));
+    }
+    await page.waitForTimeout(300);
+    // Ending the gesture must not snap back to an anchor from before it.
+    expect(await body.evaluate(() => window.scrollY)).toBeCloseTo(expected, 0);
+    await body.evaluate(() => {
+      const paragraph = document.querySelector("p")!;
+      paragraph.style.height = `${parseFloat(paragraph.style.height) + 200}px`;
+    });
+    await expect.poll(() => body.evaluate(() => window.scrollY)).toBeCloseTo(expected + 200, 0);
+  });
+}
 
 test("hidden mapped list items are excluded from reverse lookup", async ({ page }) => {
   const source = "visible\n\nhidden\n\nlast";
@@ -118,6 +166,50 @@ test("hidden mapped list items are excluded from reverse lookup", async ({ page 
   await expect.poll(() => page.evaluate(() => (window as any).scrollLines.at(-1))).toBe(5);
   expect(await page.evaluate(() => (window as any).scrollLines.includes(3))).toBe(false);
 });
+
+for (const engine of ["katex", "mathjax"] as const) {
+  test(`deferred ${engine} formulas do not write scroll positions during wheel scrolling`, async ({ page }) => {
+    const blocks = Array.from({ length: 160 }, (_, i) => `\\[\\frac{x_{${i}}^2+1}{\\sqrt{1+y^2}}\\]`);
+    const source = blocks.join("\n\n");
+    let offset = 0;
+    const rendered = result(blocks.map((block, i) => `<div class="arithmatex" data-zn-node="${i}">${block}</div>`).join(""),
+      blocks.map((block, i) => {
+        const entry: SourceLocation = { id: String(i), kind: "div", precision: "exact", from: offset, to: offset + block.length };
+        offset += block.length + 2;
+        return entry;
+      }));
+    rendered.plan = { schemaVersion: 4, math: { engine, macros: {} }, runtimes: [], styles: [] };
+    await page.evaluate(async ({ source, rendered }) => {
+      await (window as any).renderResult(rendered, source);
+      (window as any).enableScrollSync(source);
+    }, { source, rendered });
+    const frame = page.frameLocator("iframe");
+    const body = frame.locator("body");
+    const formulas = frame.locator(engine === "katex" ? ".arithmatex .katex" : ".arithmatex svg");
+    const initial = await formulas.count();
+    expect(initial).toBeGreaterThan(0);
+    expect(initial).toBeLessThan(blocks.length);
+    await body.hover();
+    await body.evaluate(() => {
+      // Observe actual application writes separately from native wheel movement.
+      const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+      const writes: number[] = (window as any).scrollWrites = [];
+      document.dispatchEvent(new WheelEvent("wheel", { deltaY: 400 }));
+      Object.defineProperty(document.scrollingElement!, "scrollTop", {
+        configurable: true,
+        get() { return descriptor.get!.call(this); },
+        set(value: number) { writes.push(value); descriptor.set!.call(this, value); },
+      });
+    });
+    for (let i = 0; i < 6; i++) {
+      await page.mouse.wheel(0, 400);
+      await page.waitForTimeout(80);
+    }
+    expect(await body.evaluate(() => window.scrollY)).toBeGreaterThan(1500);
+    expect(await formulas.count()).toBeGreaterThan(initial);
+    expect(await body.evaluate(() => (window as any).scrollWrites)).toEqual([]);
+  });
+}
 
 test("generated blocks preserve reading position without reporting unrelated source lines", async ({ page }) => {
   const source = "body";

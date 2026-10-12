@@ -225,7 +225,9 @@ export class EditorToolbar {
     this.listen(window, "resize", () => this.schedulePosition());
     this.listen(document, "scroll", () => this.schedulePosition(), true);
     this.observer = new ResizeObserver((entries) => {
-      const width = entries[0].contentRect.width;
+      // Layout modes change padding, so content width can oscillate across a breakpoint.
+      // Use the outer width, which stays fixed when only the mode changes.
+      const width = entries[0].borderBoxSize[0]?.inlineSize ?? root.getBoundingClientRect().width;
       const size = width >= 780 ? "wide" : width >= 600 ? "compact" : "narrow";
       if (this.size !== size) {
         this.size = size;
@@ -233,7 +235,7 @@ export class EditorToolbar {
         this.close(false);
       }
     });
-    this.observer.observe(root);
+    this.observer.observe(root, { box: "border-box" });
     this.refresh();
   }
   private render() {

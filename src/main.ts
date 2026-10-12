@@ -347,7 +347,7 @@ $("#app").innerHTML = `
     <button class="clear-recent" data-action="clear-recent">${tr("清空最近记录")}</button>
   </div>
   <main class="main">
-    <div class="tabs-bar"><button class="icon-btn start-toggle" data-action="welcome" title="${tr("起始页")}" aria-label="${tr("起始页")}">${icon("notebook-pen")}</button><div id="tabs" role="tablist"></div><button class="icon-btn" data-action="new" title="${tr("新建笔记")}">${icon("plus")}</button><div class="tabs-spacer"></div><button class="icon-btn" data-action="commands" title="${tr("快速操作 Ctrl+K")}" aria-label="${tr("快速操作")}">${icon("command")}</button><button class="icon-btn save-btn" data-action="save" title="${tr("保存 Ctrl+S")}" aria-label="${tr("保存")}">${icon("save")}</button><button class="icon-btn" data-action="settings" title="${tr("渲染设置")}" aria-label="${tr("渲染设置")}">${icon("settings")}</button><div class="focus-mode-controls"><button class="icon-btn focus-edit" data-action="focus-edit" title="${tr("切换到编辑")}" aria-label="${tr("切换到编辑")}">${icon("code-2")}</button><button class="icon-btn" data-action="theme" title="${tr("切换界面主题")}" aria-label="${tr("切换界面主题")}">${icon("sun")}</button><button class="icon-btn" data-action="focus" title="${tr("专注模式 Ctrl+Shift+F")}" aria-label="${tr("专注模式")}" aria-pressed="false">${icon("focus")}</button></div></div>
+    <div class="tabs-bar"><button class="icon-btn start-toggle" data-action="welcome" title="${tr("起始页")}" aria-label="${tr("起始页")}">${icon("notebook-pen")}</button><div id="tabs" role="tablist"></div><button class="icon-btn" data-action="new" title="${tr("新建笔记")}">${icon("plus")}</button><div class="tabs-spacer"></div><button class="icon-btn" data-action="commands" title="${tr("快速操作 Ctrl+K")}" aria-label="${tr("快速操作")}">${icon("command")}</button><button class="icon-btn save-btn" data-action="save" title="${tr("保存 Ctrl+S")}" aria-label="${tr("保存")}">${icon("save")}</button><button class="icon-btn" data-action="settings" title="${tr("渲染设置")}" aria-label="${tr("渲染设置")}">${icon("settings")}</button><div class="focus-mode-controls"><div class="view-modes focus-view-modes" role="group" aria-label="${tr("编辑模式")}">${(["source", "split", "read"] as const).map((value, index) => `<button type="button" data-focus-mode="${value}" class="${mode === value ? "active" : ""}" title="${tr(["编辑", "对照", "阅读"][index])}" aria-label="${tr(["Markdown 编辑", "Python Markdown 对照预览", "阅读模式"][index])}" aria-pressed="${mode === value}">${icon(["code-2", "columns-2", "book-open"][index])}</button>`).join("")}</div><button class="icon-btn" data-action="theme" title="${tr("切换界面主题")}" aria-label="${tr("切换界面主题")}">${icon("sun")}</button><button class="icon-btn" data-action="focus" title="${tr("专注模式 Ctrl+Shift+F")}" aria-label="${tr("专注模式")}" aria-pressed="false">${icon("focus")}</button></div></div>
     <div class="editor-toolbar"></div>
     <section id="start-page" aria-label="${tr("欢迎使用 ZNote")}" hidden></section>
     <div id="conflict-banner" class="banner conflict" hidden></div>
@@ -1432,8 +1432,12 @@ function setMode(value: Mode, remember = !externalView) {
   mode = value;
   if (remember) { prefs.mode = value; persistPrefs(); }
   document
-    .querySelectorAll<HTMLElement>("[data-mode]")
-    .forEach((el) => el.classList.toggle("active", el.dataset.mode === value));
+    .querySelectorAll<HTMLElement>("[data-mode], [data-focus-mode]")
+    .forEach((el) => {
+      const active = (el.dataset.focusMode ?? el.dataset.mode) === value;
+      el.classList.toggle("active", active);
+      if (el.matches("button")) el.setAttribute("aria-pressed", String(active));
+    });
   $(".writing-area").dataset.mode = value;
   editorToolbar?.refresh();
   scheduleRender();
@@ -2447,10 +2451,6 @@ const actions: Record<string, () => unknown> = {
     const active = document.body.classList.toggle("focus-mode");
     $('[data-action="focus"]').setAttribute("aria-pressed", String(active));
   },
-  "focus-edit": () => {
-    setMode("source");
-    current()?.editor?.view.focus();
-  },
   settings: showSettings,
   theme: () => {
     prefs.theme = prefs.theme === "light" ? "dark" : prefs.theme === "dark" ? "system" : "light";
@@ -2519,9 +2519,12 @@ document.addEventListener("click", (e) => {
     void openRecentFolder(recentFolder.dataset.recentFolder!);
     return;
   }
-  const modeButton = target.closest<HTMLElement>("[data-mode]");
+  const modeButton = target.closest<HTMLElement>("[data-mode], [data-focus-mode]");
   if (modeButton) {
-    setMode(modeButton.dataset.mode as Mode);
+    const value = (modeButton.dataset.focusMode ?? modeButton.dataset.mode) as Mode;
+    setMode(value);
+    if (modeButton.hasAttribute("data-focus-mode") && value !== "read")
+      current()?.editor?.view.focus();
     return;
   }
   const sideButton = target.closest<HTMLElement>(".sidebar-nav [data-side]");

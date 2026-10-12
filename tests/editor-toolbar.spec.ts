@@ -148,6 +148,55 @@ test("Material insertion wraps selected content and menus navigate to admonition
   await expect(page.locator(".cm-content")).toHaveText("First lineSecond line");
 });
 
+test("focus mode switches views at narrow widths and follows the current mode", async ({ page }) => {
+  await page.setViewportSize({ width: 480, height: 700 });
+  const controls = page.locator(".focus-view-modes");
+  await expect(controls).toBeHidden();
+  await write(page, "Focus mode note");
+  await page.locator(".toolbar-mode-select").selectOption("split");
+  await page.locator('[data-action="focus"]').click();
+  await expect(controls.locator('[data-focus-mode="split"]')).toHaveAttribute("aria-pressed", "true");
+  for (const value of ["read", "source", "split"]) {
+    const button = controls.locator(`[data-focus-mode="${value}"]`);
+    await button.click();
+    await expect(page.locator(".writing-area")).toHaveAttribute("data-mode", value);
+    await expect(page.locator("body")).toHaveClass(/focus-mode/);
+    await expect(button).toHaveAttribute("aria-pressed", "true");
+    expect(await controls.evaluate((el) => el.getBoundingClientRect().right)).toBeLessThanOrEqual(480);
+    if (value !== "read") await expect(page.locator(".cm-content")).toBeFocused();
+  }
+  await page.locator('[data-action="focus"]').click();
+  await expect(controls).toBeHidden();
+  await expect(page.locator(".toolbar-mode-select")).toHaveValue("split");
+  await expect(page.locator(".cm-content")).toHaveText("Focus mode note");
+});
+
+test("toolbar layout stays stable around responsive breakpoints", async ({ page }) => {
+  await page.locator(".status-sidebar-toggle").click();
+  const toolbar = page.locator(".editor-toolbar");
+  // Include widths where changing toolbar padding used to trigger a resize loop.
+  for (const width of [616, 624, 615, 625, 599, 600, 601, 779, 780, 781, 804, 480]) {
+    await page.setViewportSize({ width, height: 850 });
+    const samples = await toolbar.evaluate(async (element) => {
+      const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await nextFrame();
+      await nextFrame();
+      const samples: { size: string | undefined; height: number }[] = [];
+      for (let frame = 0; frame < 12; frame++) {
+        await nextFrame();
+        samples.push({
+          size: (element as HTMLElement).dataset.size,
+          height: element.getBoundingClientRect().height,
+        });
+      }
+      return samples;
+    });
+    expect(new Set(samples.map((sample) => sample.size)).size, `layout changes at width ${width}`).toBe(1);
+    expect(new Set(samples.map((sample) => sample.height)).size, `height changes at width ${width}`).toBe(1);
+    await expect(toolbar).toHaveAttribute("data-size", width >= 780 ? "wide" : width >= 600 ? "compact" : "narrow");
+  }
+});
+
 test("narrow editor keeps the three feature entries and reading offers a return to editing", async ({
   page,
 }) => {

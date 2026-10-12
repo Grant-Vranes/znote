@@ -118,8 +118,15 @@ export class PreviewSurface {
 
   private restoreReadingPosition() {
     const doc = this.frame?.contentDocument;
+    if (!doc || this.intent !== "preview") return;
+    // Deferred math, diagrams and images can change layout during a gesture.
+    // Follow the user's current viewport instead of restoring a stale anchor.
+    if (this.userScrolling || this.pointerScrolling) {
+      this.rememberReadingPosition();
+      return;
+    }
     const position = this.readingPosition;
-    if (!doc || !position || this.intent !== "preview") return;
+    if (!position) return;
     let element = position.element;
     if (!isPreviewVisible(element))
       element = previewAnchorAt(this.scrollAnchors, position.line)?.element || element;
@@ -130,6 +137,16 @@ export class PreviewSurface {
     this.writeScroll(top + rect.top + rect.height * position.fraction + position.gap - position.viewportY);
     this.geometryDirty = true;
     this.rememberReadingPosition();
+  }
+
+  private scheduleScrollIdle() {
+    clearTimeout(this.scrollIdleTimer);
+    this.scrollIdleTimer = window.setTimeout(() => {
+      if (this.pointerScrolling) return;
+      this.userScrolling = false;
+      // Start future layout compensation from where the gesture actually ended.
+      if (this.intent === "preview") this.rememberReadingPosition();
+    }, 240);
   }
 
   private invalidateGeometry = () => {
@@ -518,16 +535,14 @@ export class PreviewSurface {
         this.cursorFrame = 0;
         this.cursorTarget = undefined;
         this.rememberReadingPosition();
-        clearTimeout(this.scrollIdleTimer);
-        this.scrollIdleTimer = window.setTimeout(() => { if (!this.pointerScrolling) this.userScrolling = false; }, 240);
+        this.scheduleScrollIdle();
       };
       doc.addEventListener("wheel", markScrollInput, { passive: true });
       doc.addEventListener("touchmove", markScrollInput, { passive: true });
       doc.addEventListener("pointerdown", () => { this.pointerScrolling = true; markScrollInput(); }, { passive: true });
       const releasePointer = () => {
         this.pointerScrolling = false;
-        clearTimeout(this.scrollIdleTimer);
-        this.scrollIdleTimer = window.setTimeout(() => { this.userScrolling = false; }, 240);
+        this.scheduleScrollIdle();
       };
       doc.addEventListener("pointerup", releasePointer, { passive: true });
       doc.addEventListener("pointercancel", releasePointer, { passive: true });
@@ -547,8 +562,7 @@ export class PreviewSurface {
         }
         this.suppressedScrollTop = null;
         if (!this.userScrolling && !this.pointerScrolling) return;
-        clearTimeout(this.scrollIdleTimer);
-        this.scrollIdleTimer = window.setTimeout(() => { if (!this.pointerScrolling) this.userScrolling = false; }, 240);
+        this.scheduleScrollIdle();
         if (this.scrollFrame) cancelAnimationFrame(this.scrollFrame);
         this.scrollFrame = requestAnimationFrame(() => {
           this.scrollFrame = 0;

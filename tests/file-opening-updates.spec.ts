@@ -49,11 +49,19 @@ test("system startup applies focus reading, skips session restoration, and prese
   await expect(page.locator(".writing-area")).toHaveAttribute("data-mode", "read");
   const calls = await page.evaluate(() => (window as any).calls.map((call: any) => call.command));
   expect(calls).not.toContain("restore_workspace"); expect(calls).not.toContain("read_recovery");
-  await page.getByRole("button", { name: "切换到编辑", exact: true }).click();
-  await expect(page.locator(".writing-area")).toHaveAttribute("data-mode", "source");
+  const modes = page.locator(".focus-view-modes");
+  await expect(modes.locator('[data-focus-mode="read"]')).toHaveAttribute("aria-pressed", "true");
+  for (const value of ["source", "split", "read", "source"]) {
+    await modes.locator(`[data-focus-mode="${value}"]`).click();
+    await expect(page.locator(".writing-area")).toHaveAttribute("data-mode", value);
+    await expect(page.locator("body")).toHaveClass(/focus-mode/);
+    await expect(modes.locator('[aria-pressed="true"]')).toHaveCount(1);
+    await expect(modes.locator(`[data-focus-mode="${value}"]`)).toHaveAttribute("aria-pressed", "true");
+  }
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem("znote:preferences")!).mode)).toBe("split");
   await page.locator('[data-action="focus"]').click();
   await expect(page.locator("body")).not.toHaveClass(/focus-mode/);
+  await expect(modes).toBeHidden();
 });
 
 test("running app receives new requests without replacing dirty contents or duplicating tabs", async ({ page }) => {
@@ -63,7 +71,7 @@ test("running app receives new requests without replacing dirty contents or dupl
   await page.evaluate(() => (window as any).emitOpen());
   await expect(page.locator(".writing-area")).toHaveAttribute("data-mode", "read");
   await expect(page.locator("#tabs .tab")).toHaveCount(1);
-  await page.locator('[data-action="focus-edit"]').click();
+  await page.locator('[data-focus-mode="source"]').click();
   await expect(page.locator(".tab-editor:not([hidden]) .cm-content")).toHaveText("Unsaved text");
 });
 

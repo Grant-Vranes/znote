@@ -447,6 +447,7 @@ kbd {
 .main {
   flex: 1;
   min-width: 0;
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   background: var(--paper);
@@ -536,7 +537,7 @@ kbd {
   flex-wrap: wrap;
 }
 .structured-toolbar { min-height: 48px; padding: 6px 16px; gap: 12px; flex-wrap: nowrap; }
-.structured-toolbar .format-tools { gap: 6px; min-width: 0; }
+.structured-toolbar .format-tools { gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .toolbar-group { display: contents; }
 .toolbar-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 32px; min-width: 30px; padding: 0 6px; border-radius: 7px; color: var(--text); font-size: 12px; white-space: nowrap; }
 .toolbar-button svg, .toolbar-return svg { width: 16px; height: 16px; flex-shrink: 0; }
@@ -1421,6 +1422,31 @@ kbd {
   margin: 0;
   color: inherit;
 }
+@container (max-width: 440px) {
+  .statusbar > div {
+    min-width: 0;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .statusbar > div:first-child {
+    flex: 1;
+  }
+  .statusbar > div:last-child {
+    flex-shrink: 0;
+  }
+  #save-status {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #word-count,
+  #encoding,
+  #eol {
+    display: none;
+  }
+  .statusbar #profile-status {
+    max-width: 80px;
+  }
+}
 .unsaved {
   color: var(--warning);
 }
@@ -1482,8 +1508,8 @@ kbd {
 .focus-mode .cm-content {
   padding-top: 65px !important;
 }
-.focus-edit { display: none; }
-.focus-mode .focus-edit { display: inline-flex; }
+.focus-view-modes { display: none; }
+.focus-mode .focus-view-modes { display: flex; }
 .update-notes { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; font-family: inherit; font-size: 13px; }
 #toasts {
   position: fixed;
