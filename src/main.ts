@@ -1,6 +1,7 @@
 import { tr, getLanguage, setLanguage, normalizeLanguage, languagePacks, onLanguageChange, localizeUi, localizeError } from "./i18n";
 import type { Language } from "./i18n";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { readText as readNativeClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { normalizeFileOpening, openRequestPolicy, fileOpeningMarkup } from "./file-opening";
@@ -2215,8 +2216,15 @@ async function editorClipboard(action: string, editor: NoteEditor) {
     return;
   }
   try {
-    const text = await navigator.clipboard.readText();
+    // WebView clipboard-read permission is separate from native Ctrl+V.
+    // Desktop menu actions use the OS clipboard through Tauri instead.
+    const clipboardText = await (native
+      ? readNativeClipboardText()
+      : navigator.clipboard.readText());
     if (current()?.editor !== editor) return;
+    if (!clipboardText) { view.focus(); return; }
+    // CodeMirror normalizes line breaks; use the same length for the cursor.
+    const text = clipboardText.replace(/\r\n?/g, "\n");
     if (action === "paste-quote") {
       const quote = text
         .split("\n")
@@ -2745,12 +2753,14 @@ async function handleOpenTickets(tickets: OpenTicket[]) {
     const policy = openRequestPolicy(ticket, prefs.fileOpening, prefs.mode);
     try {
       const result = await invoke<{ documents: DiskDocument[]; errors: string[] }>("complete_open_request", { id: ticket.id, newWindow: policy.newWindow });
-      for (const doc of result.documents) { addTab(doc); await rememberRecentFile(doc.path); }
       if (result.documents.length) {
+        // Commit the opening layout before activating any tabs or yielding to IPC.
         externalView = ticket.source === "system";
         setMode(policy.mode, !externalView);
         document.body.classList.toggle("focus-mode", policy.focus);
         $('[data-action="focus"]').setAttribute("aria-pressed", String(policy.focus));
+        for (const doc of result.documents) addTab(doc);
+        for (const doc of result.documents) await rememberRecentFile(doc.path);
       }
       for (const error of result.errors) fail(error);
     } catch (error) { fail(error); }
@@ -2832,4 +2842,13 @@ async function start() {
   }
   scheduleRecovery();
 }
-void start();
+// Native windows start hidden so asynchronous startup cannot expose the home
+// screen or the previous editing layout before the opening policy is applied.
+// Reveal failures too, so the user can see the error and continue using the app.
+void start().catch(fail).finally(async () => {
+  if (native) {
+    const window = getCurrentWindow();
+    await window.show().catch(fail);
+    await window.setFocus().catch(fail);
+  }
+});

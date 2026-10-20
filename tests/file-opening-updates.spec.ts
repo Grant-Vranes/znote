@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 
-async function desktop(page: Page, options: { initial?: boolean; target?: "new" | "current"; home?: boolean; update?: "new" | "none" | "unpublished" | "error" } = {}) {
+async function desktop(page: Page, options: { initial?: boolean; target?: "new" | "current"; home?: boolean; deferredOpen?: boolean; openError?: boolean; startupError?: boolean; update?: "new" | "none" | "unpublished" | "error" } = {}) {
   await page.addInitScript(options => {
     const app = window as any;
     const path = "C:\\Notes\\中文 笔记.md";
@@ -21,9 +22,29 @@ async function desktop(page: Page, options: { initial?: boolean; target?: "new" 
       unregisterCallback: () => {},
       invoke: async (command: string, args: any) => {
         app.calls.push({ command, args });
-        if (command === "plugin:event|listen") { events.set(args.event, args.handler); return args.handler; }
-        if (command === "pending_open_requests") { const tickets = pending; pending = []; return tickets; }
-        if (command === "complete_open_request") return { documents: args.newWindow ? [] : [doc], errors: [] };
+        if (command === "plugin:event|listen") {
+          if (options.startupError && args.event === "tauri://close-requested") throw new Error("Close listener unavailable");
+          events.set(args.event, args.handler); return args.handler;
+        }
+        if (command === "plugin:window|show") {
+          app.revealedLayout = {
+            focus: document.body.classList.contains("focus-mode"),
+            mode: document.querySelector<HTMLElement>(".writing-area")?.dataset.mode,
+            home: !document.querySelector<HTMLElement>("#start-page")?.hidden,
+            sidebar: getComputedStyle(document.querySelector("#sidebar")!).display,
+            tabs: document.querySelectorAll("#tabs .tab").length,
+          };
+        }
+        if (command === "pending_open_requests") {
+          const tickets = pending; pending = [];
+          if (options.deferredOpen && tickets.length) await new Promise<void>(resolve => { app.releaseTickets = resolve; });
+          return tickets;
+        }
+        if (command === "complete_open_request") {
+          if (options.deferredOpen) await new Promise<void>(resolve => { app.releaseOpen = resolve; });
+          return { documents: args.newWindow || options.openError ? [] : [doc], errors: options.openError ? ["File unavailable"] : [] };
+        }
+        if (command === "remember_recent_file" && app.deferRecent) await new Promise<void>(resolve => { app.releaseRecent = resolve; });
         if (command === "read_recovery") return [];
         if (command === "restore_workspace") return { root: "C:\\Notes", name: "Notes", truncated: false, entries: [] };
         if (command === "list_recent_files") return [];
@@ -40,8 +61,47 @@ async function desktop(page: Page, options: { initial?: boolean; target?: "new" 
     };
   }, options);
   await page.goto("/");
+  if (options.deferredOpen || options.startupError) return;
   await expect.poll(() => page.evaluate(() => (window as any).calls.some((call: any) => call.command === "renderer_info"))).toBe(true);
 }
+
+test("the first native reveal uses the final focus reading layout even when opening is slow", async ({ page }) => {
+  const tauriConfig = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
+  expect(tauriConfig.app.windows[0].visible).toBe(false);
+  await desktop(page, { initial: true, deferredOpen: true });
+  await expect.poll(() => page.evaluate(() => typeof (window as any).releaseTickets)).toBe("function");
+  expect(await page.evaluate(() => (window as any).revealedLayout)).toBeUndefined();
+  await page.evaluate(() => (window as any).releaseTickets());
+  await expect.poll(() => page.evaluate(() => typeof (window as any).releaseOpen)).toBe("function");
+  expect(await page.evaluate(() => (window as any).revealedLayout)).toBeUndefined();
+  await page.evaluate(() => (window as any).releaseOpen());
+  await expect.poll(() => page.evaluate(() => (window as any).revealedLayout)).toEqual({
+    focus: true, mode: "read", home: false, sidebar: "none", tabs: 1,
+  });
+});
+
+test("current-window opening applies the layout before waiting for recent-file storage", async ({ page }) => {
+  await desktop(page, { target: "current", home: true });
+  await page.evaluate(() => { (window as any).deferRecent = true; (window as any).emitOpen(); });
+  await expect.poll(() => page.evaluate(() => typeof (window as any).releaseRecent)).toBe("function");
+  await expect(page.locator("body")).toHaveClass(/focus-mode/);
+  await expect(page.locator(".writing-area")).toHaveAttribute("data-mode", "read");
+  await expect(page.locator("#sidebar")).toBeHidden();
+  await expect(page.locator("#tabs .tab")).toHaveCount(1);
+  await page.evaluate(() => (window as any).releaseRecent());
+});
+
+test("failed file opening still reveals the home screen and error", async ({ page }) => {
+  await desktop(page, { initial: true, openError: true });
+  await expect.poll(() => page.evaluate(() => (window as any).revealedLayout?.home)).toBe(true);
+  await expect(page.getByRole("alert")).toContainText("File unavailable");
+});
+
+test("unexpected startup failure still reveals the window", async ({ page }) => {
+  await desktop(page, { startupError: true });
+  await expect.poll(() => page.evaluate(() => (window as any).revealedLayout?.home)).toBe(true);
+  await expect(page.getByRole("alert")).toContainText("Close listener unavailable");
+});
 
 test("system startup applies focus reading, skips session restoration, and preserves working preferences", async ({ page }) => {
   await desktop(page, { initial: true });

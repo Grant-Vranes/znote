@@ -718,6 +718,7 @@ fn main() {
         requests.push(request);
     }
     let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(requests)
         .manage(open_requests::PendingOpens::default());
     // Explicit new windows keep the existing process-per-window architecture and

@@ -85,8 +85,12 @@ pub(crate) fn receive(app: &tauri::AppHandle, args: Vec<String>, cwd: String) {
     // arriving before the listener is mounted or while another request is handled.
     let _ = app.emit("open-requests-ready", ());
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+        // Startup owns the first reveal, including requests received while it
+        // is still preparing the initial document and its display mode.
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
     }
 }
 
