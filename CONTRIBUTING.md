@@ -68,8 +68,7 @@ znote/
 │   ├── znote_renderer.py       JSONL 协议入口（常驻进程）
 │   ├── source_map.py           解析阶段的块位置传播（固定 Markdown 版本适配）
 │   ├── render_plan.py          渲染计划、扩展依赖、修订号、有界解析缓存
-│   ├── render_config.py        配置规范化
-│   └── test_*.py               渲染器单元测试
+│   └── render_config.py        配置规范化
 ├── src-tauri/                  桌面外壳（Rust）
 │   ├── src/main.rs             文件读写、访问授权、原子保存、渲染器进程管理
 │   ├── tauri.conf.json         窗口、CSP、打包与资源映射
@@ -83,7 +82,7 @@ znote/
 │   ├── check-editor-templates.mjs 编辑器模板与 Python 渲染器集成测试
 │   ├── benchmark-*             源码映射与预览同步性能测量
 │   ├── *.html + *-fixture.ts   测试载具与夹具装配器
-│   ├── fixtures/               渲染样本、跨语言配置边界用例、语法覆盖样本
+│   ├── fixtures/               浏览器回归使用的渲染样本
 │   └── vendor/                 Zensical 原始样式对照、来源记录与许可证
 ├── docs/                       面向使用者的文档与示例
 ├── scripts/                    构建与发版脚本
@@ -135,7 +134,7 @@ pnpm run styles:sync
 ## 测试
 
 ```powershell
-# 前端单元测试（vitest）
+# 浏览器回归（Playwright + Edge；也可使用 pnpm run test:browser）
 pnpm test
 
 # 类型检查
@@ -144,26 +143,22 @@ pnpm run check
 # 编辑器插入模板与实际 Python 渲染器的集成测试
 pnpm run test:editor-render
 
-# 渲染器单元测试
-& .venv/Scripts/python.exe -m unittest discover -s python -p 'test_*.py'
-
-# Rust 测试（编码、BOM、CRLF、冲突检测、目录树过滤）
-cargo test --manifest-path src-tauri/Cargo.toml
+# Front matter JSONL 协议与提示框源码映射集成回归（也由 test:editor-render 执行）
+& .venv/Scripts/python.exe tests/test-front-matter.py
+& .venv/Scripts/python.exe tests/test-callouts.py
 
 # 冻结渲染器端到端（测的是 build/renderer-dist 里的产物）
 & .venv/Scripts/python.exe tests/test-bundled-renderer.py
-
-# 浏览器回归（Playwright + Edge）
-pnpm run test:browser
 ```
+
+现有测试集中在 `tests/`，保留浏览器回归、编辑器模板与渲染器集成、打包产物检查。
+项目不再维护独立的 TypeScript、Python 或 Rust 单元测试；Python 集成脚本验证实际渲染行为及源码映射。
 
 ### 测试夹具
 
 | 文件 | 说明 |
 | --- | --- |
-| `tests/fixtures/syntax-coverage.md` | **最大语法覆盖**样本。用最小体积同时触发全部内置扩展，`test_renderer.py` 靠它一次断言 15 个扩展标记，是「某个扩展被意外关掉」的主要回归网 |
 | `tests/fixtures/rendered.json` | 浏览器回归的比对基准，由渲染器生成 |
-| `tests/fixtures/config-cases.json` | 跨语言配置边界用例，**同时**被 TypeScript 与 Python 测试消费 |
 
 ## 代码约定
 
@@ -173,8 +168,7 @@ pnpm run test:browser
 
 - 字段类型、取值范围、默认值、扩展选项、阅读预设都定义在这里。
 - TypeScript 侧由它生成设置面板控件；Python 侧由它生成扩展配置。
-- 前端与 Python 都运行 `tests/fixtures/config-cases.json` 的边界用例，
-  确保两侧校验行为不漂移。
+- 修改配置时通过浏览器回归与实际渲染器集成检查验证两侧行为。
 
 不要在两处分别硬编码选项定义。
 
@@ -184,7 +178,7 @@ pnpm run test:browser
 
 1. 在 `src/render-config.ts` 与 `python/render_config.py` 两侧同时更新迁移逻辑（兼容 1 / 2）。
 2. 更新 `config/render-capabilities.json` 的 `schemaVersion`。
-3. 补充 `tests/fixtures/config-cases.json` 的边界用例。
+3. 更新对应的浏览器回归与渲染器集成用例。
 
 修订号 `revisions.parse` / `revisions.runtime` / `revisions.style` 决定失效范围：
 只改阅读样式或公式引擎时应复用解析结果，不要重新解析全文。
@@ -205,6 +199,9 @@ HTML 类名、生成器函数、格式化回调、资源路径属于应用内部
 性能测量脚本为 `tests/benchmark-source-map.py`（交替比较原生/映射解析）与
 `tests/benchmark-preview-sync.mjs`（需要 1430 端口的 Vite 测试服务器）。两者接受文档路径，
 只读取文档；前端测量包括稳定布局下的索引、查询和插入内容后的公式节点复用，不能代替桌面 IPC 整链路测量。
+
+输入回调传递 CodeMirror 的不可变文档；应用通过 `DocumentText` 按需生成每个版本的字符串。保存、预览和恢复快照
+需要立即读取最新版本，不能将它们绑定到延迟的侧栏刷新结果。
 
 ### 前端
 
@@ -227,11 +224,9 @@ HTML 类名、生成器函数、格式化回调、资源路径属于应用内部
 
 - [ ] `pnpm run check` 通过
 - [ ] `pnpm test` 通过
-- [ ] Python 渲染器测试通过
-- [ ] `cargo test` 通过
+- [ ] 改动涉及编辑器模板或渲染配置时：`pnpm run test:editor-render` 通过
 - [ ] 改动涉及渲染逻辑时：已运行 `tests/generate-fixtures.py` 重新生成 `tests/fixtures/rendered.json`
 - [ ] 改动涉及 `python/` 时：已重建渲染器，且 `tests/test-bundled-renderer.py` 通过
-- [ ] `pnpm run test:browser` 通过
 - [ ] 改动涉及 Zensical 版本时：已运行 `pnpm run styles:sync`，且产物无意外差异
 - [ ] 新增扩展选项时：已同步更新 `config/render-capabilities.json`
 - [ ] 未提交任何构建产物或本机数据（`git status` 应保持干净）

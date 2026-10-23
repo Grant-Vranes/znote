@@ -23,11 +23,20 @@ def request(value):
 try:
     info = request({"action": "info"})
     assert "zensical" in info["versions"]
+    metadata = request({"action": "render", "text": "---\ndate: 2026-10-10\nhistory:\n  - updated: 2026-10-11\n---\n# Date"})
+    assert metadata["meta"]["date"] == "2026-10-10"
+    assert metadata["meta"]["history"][0]["updated"] == "2026-10-11"
     assert info["capabilities"]["schemaVersion"] == 3
     for field in ("features.codeAnnotations", "features.codeCopy", "features.codeSelect"):
         assert field in info["capabilities"]["fields"], f"Packaged renderer lacks {field}"
     default = request({"action": "render", "text": "!!! note\n\n    你好 😀"})
     assert "admonition note" in default["html"]
+    callout = request({"action": "render", "text": "> [!TIP]- Title\n> Body", "includeEffectiveConfig": True})
+    assert 'class="tip"' in callout["html"] and "<summary" in callout["html"]
+    assert not callout["warnings"], callout["warnings"]
+    assert callout["effectiveConfig"]["extensionConfigs"]["pymdownx.quotes"]["callouts"] is True
+    assert any(e["kind"] == "p" and e["precision"] == "exact" and e["from"] == 16
+               for e in callout["sourceMap"]["entries"])
     assert default["plan"]["schemaVersion"] == 4
     assert "effectiveConfig" not in default and "extensions" not in default
     controls = request({"action": "render", "text": "```python {.copy .select}\nprint(1)\n```",

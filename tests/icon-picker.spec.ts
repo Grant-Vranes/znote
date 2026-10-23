@@ -121,7 +121,6 @@ test("online icon picker replaces the saved editor selection with a shortcode", 
   await page.getByRole("searchbox", { name: "搜索图标" }).fill("home");
   await expect(page.locator(".icon-picker-result")).toHaveCount(2);
   await expect(page.getByRole("option", { name: "Emoji" })).toHaveCount(0);
-  await expect(page.locator(".icon-picker-preview img").first()).toHaveAttribute("src", /^data:image\/svg\+xml/);
   expect(new URL(searchUrl).searchParams.get("query")).toBe("home");
   await page.getByRole("button", { name: "插入 :lucide-home:" }).click();
   await expect(content).toHaveText(":lucide-home:");

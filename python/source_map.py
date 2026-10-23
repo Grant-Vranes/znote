@@ -13,6 +13,7 @@ from types import MethodType
 
 from markdown.treeprocessors import Treeprocessor
 from markdown import util
+from pymdownx.quotes import QuotesProcessor
 
 ATTRIBUTE = "data-zn-node"
 BLOCK_TAGS = {"p", "pre", "blockquote", "ul", "ol", "li", "table", "tr",
@@ -153,7 +154,8 @@ class SourceMap(Treeprocessor):
                 self.in_document = False
 
         def chunk(parser, parent, text):
-            located = self.locate(parent, text)
+            callout = self.callout_chunk(parent, text)
+            located = callout[0] if callout else self.locate(parent, text)
             pieces = []
             cursor = 0
             for piece in str(located).split("\n\n"):
@@ -161,6 +163,10 @@ class SourceMap(Treeprocessor):
                 pieces.append(Chunk(piece, located.origins[cursor:cursor + count]))
                 cursor += count + 1
             parser.parseBlocks(parent, pieces)
+            if callout and callout[1]:
+                # A generated title inherits its marker line, but the container
+                # still has an exact range including the original marker.
+                self.nodes[parent] = callout[1]
 
         def blocks(parser, parent, values):
             # This loop mirrors the public BlockParser.parseBlocks contract.
@@ -214,6 +220,51 @@ class SourceMap(Treeprocessor):
         parser.parseChunk = MethodType(chunk, parser)
         parser.parseBlocks = MethodType(blocks, parser)
         self.md.treeprocessors.register(self, "znote_source_map", -100)
+
+    def callout_chunk(self, parent, text):
+        """Carry origins through the pinned Quotes 12.1 title insertion.
+
+        Quotes passes a title + blank line + cleaned body to parseChunk. Match
+        that transformation before normal chunk alignment, which cannot match
+        the inserted line to the original marker. Never change parser output.
+        """
+        if parent.tag != "blockquote" or not parent.get("data-alert") or self.active is None:
+            return None
+        processor = self.md.parser.blockprocessors["quote"]
+        if not isinstance(processor, QuotesProcessor):
+            return None
+        scope = self.active
+        match = processor.RE.search(scope)
+        if not match:
+            return None
+        source = str(scope)[match.start():]
+        start = str(scope)[:match.start()].count("\n")
+        lines = source.split("\n")
+        origins = list(scope.origins[start:start + len(lines)])
+        container = Chunk(source, origins).range()
+        for index, line in enumerate(lines):
+            if line and line.strip() != ">":
+                marker = processor.RE_CALLOUT.match(line)
+                break
+        else:
+            return None
+        if not marker:
+            return None
+        title = marker.group(3).strip()
+        title_origin = origins[index]
+        if not title:
+            title = marker.group(1).split("|")[0].strip().title()
+            if title_origin:
+                title_origin = Origin(title_origin.start, title_origin.end, "inherited")
+        lines[index] = ""
+        lines.insert(index, title)
+        origins[index] = None
+        origins.insert(index, title_origin)
+        # Fall back to inherited mapping if a future upstream implementation
+        # changes this transformation instead of inventing exact positions.
+        if "\n".join(processor.clean(line) for line in lines) != text:
+            return None
+        return Chunk(text, origins), container
 
     def locate(self, parent, text):
         if isinstance(text, Chunk):

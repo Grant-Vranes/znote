@@ -1252,7 +1252,7 @@ kbd {
 .writing-area[data-mode="split"] .cm-scroller {
   font-family:
     "Cascadia Code", Consolas, "Microsoft YaHei", monospace !important;
-  font-size: calc(var(--editor-font) - 2px);
+  font-size: var(--editor-font);
 }
 .writing-area[data-mode="source"] .cm-content {
   max-width: 1050px;
@@ -1363,7 +1363,7 @@ kbd {
   max-width: 850px;
   padding: 25px 42px 150px;
   margin: 0 auto;
-  font-size: var(--editor-font);
+  font-size: var(--reader-font);
 }
 #preview-warnings {
   margin: 12px 24px 0;
@@ -2268,17 +2268,22 @@ kbd {
   border: 1px solid var(--border);
   border-radius: 8px;
   text-align: center;
+  color: var(--text);
+  background: var(--paper);
 }
 .icon-picker-result:hover,
 .icon-picker-result:focus-visible {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
-.icon-picker-result img {
+.icon-picker-glyph {
   display: block;
   width: 28px;
   height: 28px;
-  object-fit: contain;
+  background-color: currentColor;
+  -webkit-mask: var(--icon-preview) center / contain no-repeat;
+  mask: var(--icon-preview) center / contain no-repeat;
+  mask-mode: alpha;
 }
 
 .icon-picker-preview {
@@ -2286,21 +2291,23 @@ kbd {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--sidebar);
 }
 
-.icon-picker-preview img:not([src]) {
+.icon-picker-glyph:not(.preview-loaded) {
   visibility: hidden;
 }
 
-.icon-picker-result.preview-error .icon-picker-preview img {
+.icon-picker-result.preview-error .icon-picker-glyph {
   display: none;
 }
 
 .icon-picker-result.preview-error .icon-picker-preview::after {
   content: "×";
-  color: var(--muted);
+  color: var(--secondary);
   font-size: 22px;
   line-height: 1;
 }
@@ -2312,7 +2319,7 @@ kbd {
   white-space: nowrap;
 }
 .icon-picker-name { font-size: 11px; }
-.icon-picker-source { color: var(--muted); font-size: 10px; }
+.icon-picker-source { color: var(--secondary); font-size: 10px; }
 .icon-picker-footer { display: flex; justify-content: flex-end; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
 .icon-picker-footer button { padding: 9px 13px; border: 1px solid var(--border); border-radius: 7px; font-size: 12px; }
 .icon-picker-footer button:hover { background: var(--hover); }
@@ -2534,3 +2541,7 @@ kbd {
 .file-properties dt { color: var(--muted); }
 .file-properties dd { margin: 0; min-width: 0; overflow-wrap: anywhere; user-select: text; }
 .file-property-path { font-family: var(--font-mono); font-size: 12px; }
+
+.sidebar-directory-heading { padding: 12px 16px 6px; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .7; }
+.attachment-preview { display: flex; justify-content: center; overflow: auto; }
+.attachment-preview img { max-width: 100%; max-height: 70vh; object-fit: contain; }

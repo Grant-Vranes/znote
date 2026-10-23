@@ -20,6 +20,8 @@ DEFAULT_MARKDOWN_EXTENSIONS = {
                             "pygments_lang_class": True},
     "pymdownx.inlinehilite": {}, "pymdownx.keys": {},
     "pymdownx.magiclink": {}, "pymdownx.mark": {},
+    # Same parser used by Zensical's callouts and gh-admonitions plugin shims.
+    "pymdownx.quotes": {"callouts": True},
     "pymdownx.smartsymbols": {},
     "pymdownx.superfences": {"custom_fences": [{"name": "mermaid", "class": "mermaid"}]},
     "pymdownx.tabbed": {"alternate_style": True, "combine_header_slug": True},

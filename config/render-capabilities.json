@@ -118,6 +118,18 @@
       "options": {}
     },
     {
+      "id": "pymdownx.quotes",
+      "label": "GitHub / Obsidian 提示框",
+      "group": "内容组件",
+      "options": {
+        "callouts": {
+          "label": "识别 Callout 提示框",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    {
       "id": "pymdownx.tabbed",
       "label": "内容标签页",
       "group": "内容组件",

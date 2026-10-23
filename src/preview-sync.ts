@@ -1,4 +1,5 @@
 import { sourceLocation } from "./preview-source-map";
+import { frontMatterRange } from "./front-matter";
 
 export interface PreviewAnchor {
   element: HTMLElement;
@@ -53,7 +54,14 @@ export function previewAnchors(source: string, article: HTMLElement): PreviewAnc
     const at = lowerBound(starts, position);
     return at < starts.length && starts[at] === position ? at + 1 : Math.max(1, at);
   };
-  const mapped: PreviewAnchor[] = [];
+  const metadata = frontMatterRange(source);
+  const properties = article.querySelector<HTMLElement>(":scope > .znote-document-properties > details");
+  // Properties are app-owned DOM, so the renderer's body map cannot include
+  // them. Keep their source range separate from the reordered property fields.
+  const metadataAnchors: PreviewAnchor[] = metadata && properties
+    ? [{ element: properties, line: 1, endLine: lineAt(metadata.to), from: 0, to: metadata.to, precision: "inherited" }]
+    : [];
+  const mapped: PreviewAnchor[] = [...metadataAnchors];
   let hasMapping = false;
   for (const element of article.querySelectorAll<HTMLElement>("*")) {
     const entry = sourceLocation(element);
@@ -75,15 +83,15 @@ export function previewAnchors(source: string, article: HTMLElement): PreviewAnc
   }
   if (hasMapping) return indexSource(mapped.sort((a, b) => a.line - b.line || (b.endLine! - a.endLine!)));
 
-  const elements = Array.from(article.querySelectorAll<HTMLElement>(BLOCKS));
-  const lines = rawLines.map(sourceText);
+  const elements = Array.from(article.querySelectorAll<HTMLElement>(BLOCKS))
+    .filter(element => !element.closest(".znote-document-properties"));
+  const metadataEnd = metadata?.to ?? 0;
+  const lines = rawLines.map((text, i) => starts[i] < metadataEnd ? "" : sourceText(text));
   const headings: { line: number; text: string; level: number }[] = [];
   let fence = "";
-  let inFrontMatter = rawLines[0]?.trim() === "---";
   for (let i = 0; i < rawLines.length; i++) {
     const text = rawLines[i];
-    if (inFrontMatter) {
-      if (i && /^(---|\.\.\.)\s*$/.test(text)) inFrontMatter = false;
+    if (starts[i] < metadataEnd) {
       continue;
     }
     const marker = /^\s{0,3}(`{3,}|~{3,})/.exec(text)?.[1];
@@ -113,8 +121,8 @@ export function previewAnchors(source: string, article: HTMLElement): PreviewAnc
     }
   });
   const boundaries = [...hard.entries(), [elements.length, lines.length]];
-  let boundary = 0, nextLine = 0;
-  const anchors: PreviewAnchor[] = [];
+  let boundary = 0, nextLine = metadata ? lineAt(metadata.to) : 0;
+  const anchors: PreviewAnchor[] = [...metadataAnchors];
   const exact = new Map<string, number[]>();
   lines.forEach((text, i) => {
     if (!text) return;

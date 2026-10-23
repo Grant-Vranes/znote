@@ -1,11 +1,38 @@
 import { test, expect } from "@playwright/test";
 
+for (const stored of [
+  {},
+  { editorFontSize: 16, readerFontSize: 23 },
+  { editorFontSize: -5, readerFontSize: 100 },
+]) {
+  test(`font preferences use defaults and persist independently: ${JSON.stringify(stored)}`, async ({ page }) => {
+    await page.goto("/");
+    await page.evaluate(value => localStorage.setItem("znote:preferences", JSON.stringify(value)), stored);
+    await page.reload();
+    await page.locator('[data-action="settings"]').first().click();
+    const editor = page.getByLabel("编辑区字号", { exact: true });
+    const reader = page.getByLabel("阅读区字号", { exact: true });
+    const clamp = (value: number) => Math.max(14, Math.min(24, value));
+    await expect(editor).toHaveValue(String(clamp(stored.editorFontSize ?? 17)));
+    await expect(reader).toHaveValue(String(clamp(stored.readerFontSize ?? 17)));
+    await editor.fill("19");
+    await reader.fill("22");
+    await page.reload();
+    await page.locator('[data-action="settings"]').first().click();
+    await expect(editor).toHaveValue("19");
+    await expect(reader).toHaveValue("22");
+    await page.locator("#language-choice").selectOption("en");
+    await expect(page.getByLabel("Editor text size", { exact: true })).toHaveValue("19");
+    await expect(page.getByLabel("Reader text size", { exact: true })).toHaveValue("22");
+  });
+}
+
 test("settings categories keep navigation fixed and retain drafts and page scroll", async ({ page }) => {
   await page.goto("/");
   await page.locator('[data-action="settings"]').first().click();
   await page.getByRole("dialog").evaluate(element => Promise.all(element.getAnimations().map(animation => animation.finished)));
   const navigation = page.getByRole("tablist", { name: "设置分类" });
-  await expect(navigation.getByRole("tab")).toHaveCount(9);
+  await expect(navigation.getByRole("tab")).toHaveCount(10);
   await expect(page.getByRole("tabpanel", { name: "外观", exact: true })).toBeVisible();
   await expect(page.getByRole("tabpanel", { name: "阅读", exact: true })).toBeHidden();
   const sidebar = await navigation.boundingBox();
@@ -76,4 +103,20 @@ test("narrow settings keep categories and footer accessible without horizontal o
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(640);
   await page.getByRole("button", { name: "完成", exact: true }).click();
   await expect(dialog).toHaveCount(0);
+});
+
+
+test("image preferences persist across reopening and reload", async ({ page }) => {
+  await page.goto("/");
+  await page.locator('[data-action="settings"]').first().click();
+  await page.getByRole("tab", { name: "图像", exact: true }).click();
+  await page.locator("#image-folder").selectOption("document");
+  await page.locator('[data-image-setting="dotPrefix"]').check();
+  await page.locator('[data-image-setting="encodeUrl"]').check();
+  await page.reload();
+  await page.locator('[data-action="settings"]').first().click();
+  await page.getByRole("tab", { name: "图像", exact: true }).click();
+  await expect(page.locator("#image-folder")).toHaveValue("document");
+  await expect(page.locator('[data-image-setting="dotPrefix"]')).toBeChecked();
+  await expect(page.locator('[data-image-setting="encodeUrl"]')).toBeChecked();
 });

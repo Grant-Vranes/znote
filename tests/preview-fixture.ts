@@ -1,4 +1,5 @@
 import { PreviewSurface } from "../src/preview-surface";
+import { setLanguage } from "../src/i18n";
 import "../src/style.css";
 import type { RenderResult, MathEngine } from "../src/types";
 import { previewAnchors, previewAnchorAt, readingAnchors, readingAnchorAt } from "../src/preview-sync";
@@ -15,6 +16,7 @@ surface.onPrintShortcut = () => {
   printShortcutCount++;
 };
 Object.assign(window, {
+  setPreviewLanguage: setLanguage,
   renderResult: (result: RenderResult, source?: string, documentId = "test", renderAll = false) =>
     surface.render(host, result, undefined, (value) => warnings.push(value),
       source === undefined && !renderAll ? undefined : { source: source ?? "", documentId, renderAll }),

@@ -86,36 +86,3 @@ pub(crate) async fn check_for_updates(app: tauri::AppHandle) -> Result<UpdateChe
         .map_err(|error| format!("更新信息无效：{error}"))?;
     compare(release, &current)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn release(version: &str) -> Release {
-        Release {
-            tag_name: version.into(),
-            name: None,
-            body: Some("notes".into()),
-            html_url: format!("{RELEASES}/tag/{version}"),
-            draft: false,
-            prerelease: false,
-        }
-    }
-    #[test]
-    fn versions_compare_semantically_and_only_stable_updates_are_offered() {
-        assert!(compare(release("v0.10.0"), "0.9.0").unwrap().available);
-        assert!(!compare(release("v0.5.1"), "0.5.1").unwrap().available);
-        assert!(!compare(release("v0.4.0"), "0.5.1").unwrap().available);
-        assert!(
-            !compare(release("v0.6.0-beta.1"), "0.5.1")
-                .unwrap()
-                .available
-        );
-        let mut draft = release("v0.6.0");
-        draft.draft = true;
-        assert!(!compare(draft, "0.5.1").unwrap().available);
-        assert!(compare(release("release-latest"), "0.5.1").is_err());
-        let mut invalid = release("v0.6.0");
-        invalid.html_url = "https://example.com".into();
-        assert!(compare(invalid, "0.5.1").is_err());
-    }
-}

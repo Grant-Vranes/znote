@@ -3,6 +3,7 @@ const settingsPages = [
   { id: "appearance", get label() { return tr("外观"); }, icon: "sun", get description() { return tr("为亮色与暗色模式选择配色，调整界面与正文的显示。"); }, get group() { return tr("常用设置"); } },
   { id: "reading", get label() { return tr("阅读"); }, icon: "book-open", get description() { return tr("调整正文排版与阅读时的交互，预览会实时更新。"); }, get group() { return tr("常用设置"); } },
   { id: "writing", get label() { return tr("写作与保存"); }, icon: "notebook-pen", get description() { return tr("设置编辑与预览的同步方式，以及笔记保存习惯。"); }, get group() { return tr("常用设置"); } },
+  { id: "images", get label() { return tr("图像"); }, icon: "image", get description() { return tr("设置图片保存位置与 Markdown 路径格式。"); }, get group() { return tr("常用设置"); } },
   { id: "files", get label() { return tr("文件打开"); }, icon: "folder-open", get description() { return tr("设置系统打开文件时的界面，以及正常启动时的行为。"); }, get group() { return tr("常用设置"); } },
   { id: "math", get label() { return tr("公式"); }, icon: "hash", get description() { return tr("选择数学公式引擎，设置排版规则与自定义命令。"); }, group: "Markdown" },
   { id: "extensions", get label() { return tr("语法扩展"); }, icon: "sparkles", get description() { return tr("按需启用 Markdown 扩展，并调整每项扩展的选项。"); }, group: "Markdown" },

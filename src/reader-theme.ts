@@ -1,9 +1,11 @@
 import type { RenderResult } from "./types";
+import { appThemes } from "./app-themes";
 
 /** Translate application surfaces to document tokens; site chrome is never imported. */
 export function readerThemeCss(
   result: Pick<RenderResult, "theme">,
   source: CSSStyleDeclaration,
+  print = false,
 ) {
   const reader = result.theme?.reader ?? {
     preset: "integrated",
@@ -25,8 +27,11 @@ export function readerThemeCss(
     "code",
     "highlight",
     "selection",
-  ]) {
-    const value = source.getPropertyValue(`--${name}`).trim();
+  ] as const) {
+    // Printed pages need light tokens even when the application uses a dark palette.
+    const value = print
+      ? name === "paper" ? "#fff" : appThemes[0].light.tokens[name]
+      : source.getPropertyValue(`--${name}`).trim();
     if (value) tokens[`--znote-${name}`] = value;
   }
   tokens["--reader-width"] = `${reader.width}px`;

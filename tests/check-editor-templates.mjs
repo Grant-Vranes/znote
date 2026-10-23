@@ -100,6 +100,12 @@ try {
   console.log(
     `${cases.length} editor templates passed actual Python rendering and dependency checks.`,
   );
+  for (const script of ["tests/test-front-matter.py", "tests/test-callouts.py"]) {
+    const result = spawnSync(python, [script], { encoding: "utf8" });
+    if (result.error) throw result.error;
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  }
+  console.log("Front matter JSONL, callout rendering, configuration and source mapping checks passed.");
 } finally {
   await server.close();
 }

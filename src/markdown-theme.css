@@ -6,7 +6,7 @@
 
 /* The application chrome is separate from the official document theme. */
 .znote-render-scope {
-  --znote-rem: calc(var(--editor-font) / 0.75);
+  --znote-rem: calc(var(--reader-font) / 0.75);
   --md-text-font: "Inter Variable";
   --md-code-font: "JetBrains Mono Variable";
   --md-text-font-family:
@@ -20,7 +20,7 @@
   -webkit-font-smoothing: antialiased;
 }
 .znote-render-scope[data-zn-variant="classic"] {
-  --znote-rem: calc(var(--editor-font) / 0.8);
+  --znote-rem: calc(var(--reader-font) / 0.8);
   --md-text-font: "Roboto Variable";
   --md-code-font: "Roboto Mono Variable";
 }
@@ -102,7 +102,7 @@
 /* ZNote owns reading geometry and code line metrics. Upstream owns components. */
 .znote-render-scope[data-zn-reader] .md-typeset {
   line-height: var(--reader-line-height, 1.8);
-  font-size: var(--editor-font);
+  font-size: var(--reader-font);
 }
 .znote-render-scope[data-zn-reader] article { max-width: var(--reader-width, 820px); }
 .znote-render-scope[data-zn-reader] .md-typeset :is(h1,h2,h3,h4,h5,h6) {
@@ -113,7 +113,7 @@
 .znote-render-scope[data-zn-reader="book"] .md-typeset h1 { text-align: center; margin-bottom: 1.5em; }
 .znote-render-scope[data-zn-reader="compact"] .md-typeset :is(h1,h2,h3) { margin-top: 1.2em; margin-bottom: .6em; }
 .znote-render-scope[data-zn-reader] .highlight :is(pre,.linenos) {
-  font-size: calc(var(--editor-font) * .85);
+  font-size: calc(var(--reader-font) * .85);
   line-height: 1.6;
 }
 .znote-render-scope[data-zn-reader] .highlight pre code { font-size: inherit; line-height: inherit; }
@@ -127,6 +127,68 @@
 .znote-footnote-tooltip p { margin: 0; }
 .znote-footnote-tooltip p + p { margin-top: .7em; }
 .md-typeset .math-error { color: var(--md-code-fg-color); text-decoration: underline wavy var(--znote-code); }
+
+/* Document metadata is separate from the rendered Markdown body. */
+.znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties {
+  margin: 0 0 1.5em;
+  font-size: .85em;
+  color: var(--md-default-fg-color--light);
+}
+.znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties details {
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+}
+.znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties > details {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 8px;
+}
+.znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties summary {
+  position: static;
+  display: list-item;
+  padding: .65em 1em;
+  margin: 0;
+  background: transparent;
+  font-weight: 500;
+  cursor: pointer;
+}
+.znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties summary::before,
+.znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties summary::after { display: none; }
+.znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties summary::marker { content: "▸  "; }
+.znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties details[open] > summary::marker { content: "▾  "; }
+.znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties summary:focus-visible {
+  outline: 2px solid var(--md-accent-fg-color);
+  outline-offset: 2px;
+}
+.znote-render-scope[data-zn-variant] .md-typeset .znote-property-count { margin-left: .65em; opacity: .6; font-size: .85em; }
+.znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties dl {
+  display: grid;
+  grid-template-columns: minmax(5em, 8em) minmax(0, 1fr);
+  gap: .65em 1em;
+  padding: .4em 1em 1em;
+  margin: 0;
+}
+.znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties dt,
+.znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties dd { margin: 0; overflow-wrap: anywhere; }
+.znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties dt { font-weight: 400; }
+.znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties dd { color: var(--md-default-fg-color); white-space: pre-wrap; }
+.znote-render-scope[data-zn-variant] .md-typeset .znote-property-title { font-weight: 600; }
+.znote-render-scope[data-zn-variant] .md-typeset .znote-property-tokens { display: flex; flex-wrap: wrap; gap: .4em; }
+.znote-render-scope[data-zn-variant] .md-typeset .znote-property-tokens > span {
+  padding: 0 .5em;
+  border-radius: 4px;
+  background: var(--md-code-bg-color);
+}
+.znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties dd summary { padding: 0; }
+.znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties pre { margin: .5em 0 0; padding: .75em; white-space: pre; }
+@media (max-width: 480px) {
+  .znote-render-scope[data-zn-variant] .md-typeset .znote-document-properties dl { grid-template-columns: minmax(4em, 5em) minmax(0, 1fr); }
+}
 
 /* Code annotations are mounted by ZNote after the sanitized preview commits. */
 .znote-render-scope .znote-code-annotation {

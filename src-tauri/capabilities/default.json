@@ -1,1 +1,1 @@
-{"identifier":"main","description":"Local editor window","windows":["main"],"permissions":["core:default","core:window:allow-set-title","core:window:allow-destroy","core:window:allow-show","core:window:allow-set-focus","clipboard-manager:allow-read-text"]}
+{"identifier": "main", "description": "Local editor window", "windows": ["main"], "permissions": ["core:default", "core:window:allow-set-title", "core:window:allow-destroy", "core:window:allow-show", "core:window:allow-set-focus", "clipboard-manager:allow-read-text", "clipboard-manager:allow-read-image"]}

@@ -198,3 +198,20 @@ test("cards refuse a changed document and cancellation leaves the new selection 
   await page.getByRole("button", { name: "取消", exact: true }).click();
   await expect(activeContent(page)).toHaveText("x");
 });
+
+
+test("pasting multiple images inserts one undoable batch", async ({ page }) => {
+  await activeContent(page).evaluate(element => {
+    const transfer = new DataTransfer();
+    for (const name of ["one.png", "two.png"]) transfer.items.add(new File([new Uint8Array([137, 80, 78, 71])], name, { type: "image/png" }));
+    element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true }));
+  });
+  await expect.poll(() => page.evaluate(() => (window as any).pendingImages.length)).toBe(1);
+  await finishImageImport(page);
+  await expect.poll(() => page.evaluate(() => (window as any).pendingImages.length)).toBe(1);
+  await finishImageImport(page);
+  await expect(activeContent(page)).toContainText("![one.png](assets/pic.png)");
+  await expect(activeContent(page)).toContainText("![two.png](assets/pic.png) beta");
+  await page.keyboard.press("Control+z");
+  await expect(activeContent(page)).toHaveText(original);
+});

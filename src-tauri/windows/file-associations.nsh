@@ -3,7 +3,9 @@
 !macro NSIS_HOOK_POSTINSTALL
   WriteRegStr SHELL_CONTEXT "Software\Classes\ZNote.Markdown" "" "Markdown document"
   WriteRegStr SHELL_CONTEXT "Software\Classes\ZNote.Markdown" "FriendlyTypeName" "Markdown document"
-  WriteRegStr SHELL_CONTEXT "Software\Classes\ZNote.Markdown\DefaultIcon" "" '$\"$INSTDIR\${MAINBINARYNAME}.exe$\",0'
+  ; The bundled document icon is separate from the executable's application icon.
+  ; Rewrite on upgrades too, replacing the EXE icon registered by older versions.
+  WriteRegStr SHELL_CONTEXT "Software\Classes\ZNote.Markdown\DefaultIcon" "" '$\"$INSTDIR\icons\markdown.ico$\",0'
   WriteRegStr SHELL_CONTEXT "Software\Classes\ZNote.Markdown\shell\open\command" "" '$\"$INSTDIR\${MAINBINARYNAME}.exe$\" $\"%1$\"'
   WriteRegStr SHELL_CONTEXT "Software\Classes\.md\OpenWithProgids" "ZNote.Markdown" ""
   WriteRegStr SHELL_CONTEXT "Software\Classes\.markdown\OpenWithProgids" "ZNote.Markdown" ""

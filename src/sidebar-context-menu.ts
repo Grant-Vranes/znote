@@ -1,3 +1,4 @@
+import { isNoteFile, fileGlyph } from "./directory-cache";
 import { tr, onLanguageChange } from "./i18n";
 import { escapeHtml } from "./preview";
 
@@ -28,12 +29,12 @@ export function mountFileMenu(root: HTMLElement, target: FileTarget, view: FileV
     return `<button type="button" role="${radio ? "menuitemradio" : "menuitem"}" ${radio ? `aria-checked="${view === action}"` : ""} data-file-action="${action}" class="${action === "trash" ? "danger" : ""}" tabindex="-1"><span class="file-menu-icon" aria-hidden="true"><i data-lucide="${radio ? view === action ? "check" : "" : glyph}"></i></span><span>${escapeHtml(tr(label))}</span><kbd aria-hidden="true">${shortcut}</kbd></button>`;
   };
   const divider = '<div class="file-menu-divider" role="separator"></div>';
-  root.innerHTML = `<section class="file-context-menu" role="menu" aria-label="${tr("文件菜单")}"><header class="file-menu-heading" title="${escapeHtml(target.path)}"><i data-lucide="${target.kind === "file" ? "file-text" : "folder"}"></i><span>${escapeHtml(target.name)}</span></header>
-    ${target.kind === "file" ? item("open", "打开", "file-text", "Enter") + item("window", "在新窗口中打开", "external-link") + divider : ""}
+  root.innerHTML = `<section class="file-context-menu" role="menu" aria-label="${tr("文件菜单")}"><header class="file-menu-heading" title="${escapeHtml(target.path)}"><i data-lucide="${target.kind === "file" ? fileGlyph(target.path) : "folder"}"></i><span>${escapeHtml(target.name)}</span></header>
+    ${target.kind === "file" ? item("open", "打开", fileGlyph(target.path), "Enter") + (isNoteFile(target.path) ? item("window", "在新窗口中打开", "external-link") : "") + divider : ""}
     ${item("new", "新建文件", "file-plus")}${item("folder", "新建文件夹", "folder")}${divider}
     ${item("search", "搜索文件", "search")}${divider}
     ${item("list", "文档列表", "list")}${item("tree", "文档树", "folder")}${divider}
-    ${target.kind !== "root" ? item("rename", "重命名", "notebook-pen", "F2") + (target.kind === "file" ? item("duplicate", "创建副本", "copy") : "") + divider + item("trash", "删除", "trash-2", "Del") + divider : ""}
+    ${target.kind !== "root" ? item("rename", "重命名", "notebook-pen", "F2") + (target.kind === "file" && isNoteFile(target.path) ? item("duplicate", "创建副本", "copy") : "") + divider + item("trash", "删除", "trash-2", "Del") + divider : ""}
     ${item("properties", "属性", "file-text")}${item("copy-path", "复制文件路径", "copy")}${item("reveal", "打开文件位置", "folder-open")}</section>`;
   callbacks.icons();
   const menu = root.firstElementChild as HTMLElement;

@@ -231,7 +231,6 @@ for (const { name, text, body } of [
     body: "<div>raw</div>",
   },
   { name: "HTML", text: "<div>\nraw\n</div>", body: "raw" },
-  { name: "front matter", text: "---\ntitle: A\n---", body: "title: A" },
 ]) {
   test(`toolbar and shortcuts allow formatting inside ${name}`, async ({
     page,
@@ -266,6 +265,23 @@ for (const { name, text, body } of [
     await expect.poll(() => content.innerText()).toBe(text);
   });
 }
+
+test("front matter disables Markdown formatting and shortcuts preserve its source", async ({ page }) => {
+  const source = "---\ntitle: A\ntags:\n  - Web\n---\n\n# Body";
+  await write(page, source);
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Shift+End");
+  await expect(page.locator('.editor-toolbar [data-command="bold"]')).toBeDisabled();
+  await expect(page.locator('[data-toolbar-menu="paragraph"]')).toHaveText("YAML Front Matter");
+  await page.keyboard.press("Control+b");
+  await page.keyboard.press("Control+Alt+2");
+  await expect.poll(() => page.locator(".cm-content .cm-line").allTextContents()).toEqual(source.split("\n"));
+  await page.keyboard.press("Control+End");
+  await expect(page.locator('.editor-toolbar [data-command="bold"]')).toBeEnabled();
+  await expect(page.locator('[data-toolbar-menu="paragraph"]')).toHaveText("一级标题");
+});
 
 test("disabled card extensions are explained and only enabled by clicking the dialog action", async ({
   page,

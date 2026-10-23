@@ -361,8 +361,9 @@ export class EditorToolbar {
     )) {
       const action = button.dataset.command;
       const missing = missingByAction.get(action) ?? [];
-      button.disabled = !view || (missing.length > 0 && action !== "cards");
-      button.title = missing.length
+      const metadata = state?.frontMatter && button.dataset.toolbarMenu !== "more";
+      button.disabled = !view || !!metadata || (missing.length > 0 && action !== "cards");
+      button.title = metadata ? tr("YAML 属性区域不应用 Markdown 格式") : missing.length
         ? tr("需要启用：{0}", [missing.join(", ")])
         : button.dataset.tooltip ||
           button.getAttribute("aria-label") ||
@@ -383,7 +384,7 @@ export class EditorToolbar {
       '[data-toolbar-menu="paragraph"]',
     )!;
     const label =
-      state?.block === "mixed"
+      state?.frontMatter ? tr("YAML Front Matter") : state?.block === "mixed"
         ? tr("混合格式")
         : tr(headingNames[Number(state?.block.slice(8)) || 0]);
     paragraph.querySelector("span")!.textContent = label;
@@ -427,7 +428,8 @@ export class EditorToolbar {
         icon: glyph,
         checked,
         shortcut: commandShortcut(action) ?? shortcut,
-        reason: missing.length
+        reason: state?.frontMatter && action !== "settings" && action !== "yaml"
+          ? tr("YAML 属性区域不应用 Markdown 格式") : missing.length
           ? tr("需要启用：{0}", [missing.join(", ")])
           : undefined,
       };

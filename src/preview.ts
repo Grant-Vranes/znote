@@ -1,5 +1,6 @@
 import { tr } from "./i18n";
 import DOMPurify from "dompurify";
+import { documentProperties } from "./document-properties";
 import { mountRuntimes, mountInteractions } from "./render-plugins";
 import { invoke } from "@tauri-apps/api/core";
 import type { RenderResult } from "./types";
@@ -95,6 +96,7 @@ export interface RenderCommitHooks {
   beforeCommit?: () => void;
   afterCommit?: () => void;
   renderAll?: boolean;
+  resetProperties?: boolean;
 }
 export async function setRendered(
   container: HTMLElement,
@@ -116,7 +118,18 @@ export async function setRendered(
   container.classList.add("md-typeset");
   const staged = container.ownerDocument.createElement(container.tagName);
   staged.className = container.className;
-  staged.innerHTML = DOMPurify.sanitize(result.html, {
+  // Keep local Windows image paths as inert metadata through sanitization.
+  // The native read_asset command still checks the document's authorized scope.
+  const markup = document.createElement("template");
+  markup.innerHTML = result.html;
+  markup.content.querySelectorAll<HTMLImageElement>("img[src]").forEach(img => {
+    const source = img.getAttribute("src") || "";
+    if (/^[a-z]:[\\/]/i.test(source)) {
+      img.dataset.znSrc = source;
+      img.removeAttribute("src");
+    }
+  });
+  staged.innerHTML = DOMPurify.sanitize(markup.innerHTML, {
     ADD_ATTR: ["class", "id", "open"],
     ADD_TAGS: result.plan?.features?.inlineStyles ? ["style"] : [],
     FORCE_BODY: true,
@@ -169,6 +182,8 @@ export async function setRendered(
   // Positions are side-table data, excluded from content signatures. This also
   // removes user-supplied reserved attributes when no renderer map is present.
   bindLocations(staged, result);
+  const properties = documentProperties(container.ownerDocument, result.meta,
+    hooks.resetProperties ? null : container.querySelector(":scope > .znote-document-properties"));
   const mathCount = staged.querySelectorAll(".arithmatex").length;
   const diagramCount = staged.querySelectorAll(".mermaid").length;
   const imageCount = staged.querySelectorAll("img").length;
@@ -235,6 +250,9 @@ export async function setRendered(
     blockSignatures.set(node, signature);
     return node;
   });
+  // Keep reused properties in the live document through async preparation.
+  // Property panels need neither hydration nor Markdown runtime processing.
+  if (properties) desired.unshift(properties);
   staged.replaceChildren(
     ...desired.filter((node) => node.parentNode === staged),
   );

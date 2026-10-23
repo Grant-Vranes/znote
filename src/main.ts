@@ -1,3 +1,6 @@
+import { DirectoryCache, directoryKey, isNoteFile, isPictureFile, fileGlyph } from "./directory-cache";
+import { normalizeImageSettings, imageSettingsMarkup, imageExtension, imageMarkdown, type ImageSettings } from "./image-settings";
+import { readClipboardImages } from "./image-clipboard";
 import { tr, getLanguage, setLanguage, normalizeLanguage, languagePacks, onLanguageChange, localizeUi, localizeError } from "./i18n";
 import type { Language } from "./i18n";
 import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -73,7 +76,8 @@ import {
 import { openSearchPanel } from "@codemirror/search";
 import { initializeIcons } from "./ui-icons";
 import { NoteEditor } from "./editor";
-import { applyEditorTransaction } from "./editor-commands";
+import { DocumentText } from "./document-text";
+import { applyEditorTransaction, selectionInFrontMatter } from "./editor-commands";
 import { captureEditorSelection, restoreEditorSelection } from "./editor-commands";
 import { EditorToolbar } from "./editor-toolbar";
 import { editorCommand, commandShortcut, requiredExtensions } from "./editor-command-registry";
@@ -82,6 +86,7 @@ import { iconCollections, searchOnlineIcons } from "./icon-picker";
 import type { IconCollection, OnlineIcon } from "./icon-picker";
 import { IconPreviewLoader } from "./icon-preview-loader";
 import { startPageMarkup, startRecentMarkup } from "./start-page";
+import { displayPath } from "./path-display";
 import { commandPaletteMarkup, mountCommandPalette } from "./command-palette";
 import { headings, wordCount } from "./syntax";
 import { escapeHtml } from "./preview";
@@ -186,6 +191,7 @@ interface Tab {
   name: string;
   path?: string;
   text: string;
+  source: DocumentText;
   revision: number;
   base: string;
   hash: string;
@@ -198,13 +204,15 @@ interface Tab {
   saving?: boolean;
 }
 interface Preferences {
+  images: ImageSettings;
   fileOpening: FileOpeningPreferences;
   autoCheckUpdates: boolean;
   language: Language;
   render: RenderSettings;
   theme: ThemeMode;
   themeBindings: ThemeBindings;
-  fontSize: number;
+  editorFontSize: number;
+  readerFontSize: number;
   autosave: boolean;
   syncPreview: boolean;
   syncEditorScroll: boolean;
@@ -216,13 +224,15 @@ interface Preferences {
   fileView: FileView;
 }
 const initial: Preferences = {
+  images: normalizeImageSettings(undefined),
   fileOpening: normalizeFileOpening(undefined),
   autoCheckUpdates: false,
   language: getLanguage(),
   render: normalizeRenderSettings(undefined),
   theme: "light",
   themeBindings: normalizeThemeBindings(undefined),
-  fontSize: 17,
+  editorFontSize: 17,
+  readerFontSize: 17,
   autosave: false,
   syncPreview: true,
   syncEditorScroll: true,
@@ -232,16 +242,23 @@ const initial: Preferences = {
   fileView: "tree",
 };
 let prefs: Preferences;
+function normalizeFontSize(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(14, Math.min(24, Math.round(value)))
+    : fallback;
+}
 try {
   const stored = JSON.parse(localStorage.getItem("znote:preferences") || "{}");
   prefs = {
     ...initial,
+    images: normalizeImageSettings(stored.images),
     fileOpening: normalizeFileOpening(stored.fileOpening),
     autoCheckUpdates: stored.autoCheckUpdates === true,
     language: normalizeLanguage(stored.language),
     theme: normalizeThemeMode(stored.theme),
     themeBindings: normalizeThemeBindings(stored.themeBindings),
-    fontSize: stored.fontSize ?? initial.fontSize,
+    editorFontSize: normalizeFontSize(stored.editorFontSize, initial.editorFontSize),
+    readerFontSize: normalizeFontSize(stored.readerFontSize, initial.readerFontSize),
     autosave: stored.autosave ?? initial.autosave,
     syncPreview: typeof stored.syncPreview === "boolean" ? stored.syncPreview : initial.syncPreview,
     syncEditorScroll: typeof stored.syncEditorScroll === "boolean" ? stored.syncEditorScroll : initial.syncEditorScroll,
@@ -265,6 +282,70 @@ try {
 // Migrate 0.1.x preferences that still point to the removed live editor.
 if (!["source", "split", "read"].includes(prefs.mode)) prefs.mode = "source";
 let workspace: Workspace | undefined;
+let independentDirectory: Workspace | undefined;
+const directoryCache = new DirectoryCache();
+const independentRoots = new Set<string>();
+const directoryListingCache = new DirectoryCache(4);
+let directoryListingTimer: ReturnType<typeof setTimeout>;
+let directoryGeneration = 0;
+function sidebarRoots(): Workspace[] {
+  const path = current()?.path;
+  return [workspace, path && !isWithin(path, workspace?.root ?? "\0") ? independentDirectory : undefined]
+    .filter((root): root is Workspace => !!root);
+}
+function directoryChildren(entry: FileEntry): FileEntry[] {
+  return directoryCache.peek(entry.path)?.entries ?? entry.children;
+}
+async function syncDocumentDirectory(force = false) {
+  const generation = ++directoryGeneration;
+  const path = current()?.path;
+  independentDirectory = undefined;
+  if (!native || !path) { renderSidebar(); return; }
+  if (workspace && isWithin(path, workspace.root)) {
+    const parents: string[] = [];
+    for (let parent = parentPath(path); directoryKey(parent) !== directoryKey(workspace.root) && isWithin(parent, workspace.root); parent = parentPath(parent)) parents.unshift(parent);
+    try {
+      for (const parent of parents) {
+        if (generation !== directoryGeneration) return;
+        await directoryCache.load(parent, () => invoke<Workspace>("list_directory", { path: parent }));
+        collapsed.delete(parent);
+      }
+      if (generation === directoryGeneration) renderSidebar();
+    } catch (error) { if (generation === directoryGeneration) fail(error); }
+    return;
+  }
+  const parent = parentPath(path);
+  if (force) directoryCache.invalidate(parent);
+  const cached = directoryCache.peek(parent);
+  if (cached && independentRoots.has(directoryKey(parent))) { independentDirectory = cached; renderSidebar(); return; }
+  if (!independentRoots.has(directoryKey(parent))) directoryCache.invalidate(parent);
+  renderSidebar();
+  try {
+    const result = await directoryCache.load(parent, async () => {
+      const value = await invoke<Workspace>("document_directory", { document: path });
+      independentRoots.add(directoryKey(parent));
+      return value;
+    });
+    if (generation !== directoryGeneration) return;
+    independentDirectory = result;
+    renderSidebar();
+    if (result?.truncated) toast(tr("文件列表达到 6000 项上限，请打开更小的笔记文件夹。"), true);
+  } catch (error) { if (generation === directoryGeneration) fail(error); }
+}
+async function refreshDirectory(path: string) {
+  for (const root of sidebarRoots()) if (isWithin(path, root.root)) directoryListingCache.invalidate(root.root);
+  directoryCache.invalidate(path);
+  const result = await directoryCache.load(path, () => invoke<Workspace>("list_directory", { path }));
+  if (independentDirectory && directoryKey(independentDirectory.root) === directoryKey(path)) independentDirectory = result;
+  if (workspace && directoryKey(workspace.root) === directoryKey(path)) {
+    // Keep already loaded descendants when refreshing just the workspace root.
+    const previous = new Map(workspace.entries.map(entry => [entry.path, entry.children]));
+    for (const entry of result.entries) entry.children = entry.children.length ? entry.children : previous.get(entry.path) ?? [];
+    workspace = result;
+  }
+  renderSidebar();
+}
+
 let dismissFileMenu: (() => void) | undefined;
 let fileOperationBusy = false;
 let tabs: Tab[] = [],
@@ -357,7 +438,7 @@ $("#app").innerHTML = `
     <footer class="statusbar"><div><button class="status-sidebar-toggle" data-action="sidebar" title="${tr("收起导航 Ctrl+Shift+L")}" aria-label="${tr("收起导航")}">${icon("panel-left-close")}</button><span id="save-status">${icon("check")}${tr("所有更改已保存")}</span><span id="word-count"></span></div><div><span id="cursor-position"></span><span id="encoding">UTF-8</span><span id="eol">LF</span><button data-action="settings" title="${tr("设置渲染配置")}" id="profile-status">${tr("Zensical 默认语法")}</button></div></footer>
   </main>
   <div id="selection-toolbar" class="selection-toolbar" role="toolbar" aria-label="${tr("选中文本操作")}" hidden><span id="selection-summary"></span><span class="selection-toolbar-divider"></span><button type="button" data-selection-action="copy" title="${tr("复制 Ctrl+C")}" aria-label="${tr("复制选中文本")}">${icon("copy")}</button><button type="button" data-selection-action="bold" title="${tr("粗体 Ctrl+B")}" aria-label="${tr("将选中文本设为粗体")}">${icon("bold")}</button><button type="button" data-selection-action="italic" title="${tr("斜体 Ctrl+I")}" aria-label="${tr("将选中文本设为斜体")}">${icon("italic")}</button><button type="button" data-selection-action="code" title="${tr("行内代码")}" aria-label="${tr("将选中文本设为代码")}">${icon("code")}</button><button type="button" data-selection-action="link" title="${tr("插入链接")}" aria-label="${tr("将选中文本设为链接")}">${icon("link")}</button></div>
-  <div id="toasts" aria-live="polite"></div><div id="modal-root"></div><div id="editor-context-root"></div><div id="file-context-root"></div><input id="image-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+  <div id="toasts" aria-live="polite"></div><div id="modal-root"></div><div id="editor-context-root"></div><div id="file-context-root"></div><input id="image-picker" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
 `;
 
 const sidebar = $<HTMLElement>("#sidebar");
@@ -478,8 +559,9 @@ function applyPrefs() {
     );
   document.documentElement.style.setProperty(
     "--editor-font",
-    prefs.fontSize + "px",
+    prefs.editorFontSize + "px",
   );
+  document.documentElement.style.setProperty("--reader-font", prefs.readerFontSize + "px");
   syncSidebarWidth();
   syncSplitWidth();
   const themeButton = document.querySelector<HTMLElement>('[data-action="theme"]');
@@ -549,13 +631,14 @@ function toggleSidebarMenu() {
   menu.hidden = !menu.hidden;
   $(".sidebar-more").setAttribute("aria-expanded", String(!menu.hidden));
   menu.querySelectorAll<HTMLButtonElement>("[data-action='refresh'], [data-action='close-workspace']")
-    .forEach((button) => (button.disabled = !workspace));
+    .forEach((button) => (button.disabled = button.dataset.action === "close-workspace" ? !workspace : !sidebarRoots().length));
 }
 function recentRow(path: string, kind: "file" | "folder") {
-  const name = path.split(/[\\/]/).pop() || path;
-  const directory = path.slice(0, Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")));
+  const display = displayPath(path);
+  const name = display.split(/[\\/]/).pop() || display;
+  const directory = display.slice(0, Math.max(display.lastIndexOf("/"), display.lastIndexOf("\\")));
   const attribute = kind === "file" ? "data-recent-file" : "data-recent-folder";
-  return `<button class="recent-item" ${attribute}="${escapeHtml(path)}" title="${escapeHtml(path)}">${icon(kind === "file" ? "file-text" : "folder")}<span><strong>${escapeHtml(name)}</strong><small>${escapeHtml(directory)}</small></span></button>`;
+  return `<button class="recent-item" ${attribute}="${escapeHtml(path)}" title="${escapeHtml(display)}">${icon(kind === "file" ? "file-text" : "folder")}<span><strong>${escapeHtml(name)}</strong><small>${escapeHtml(directory)}</small></span></button>`;
 }
 function renderRecentFolders() {
   $("#recent-folders").innerHTML = prefs.recent.length
@@ -627,10 +710,13 @@ function openPreviewFind() {
 }
 previewSurface.onFindShortcut = openPreviewFind;
 previewSurface.onPrintShortcut = () => void printCurrent();
-function flatten(entries: FileEntry[]): FileEntry[] {
-  return entries.flatMap((e) => (e.directory ? flatten(e.children) : [e]));
+let sidebarRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleSidebarRefresh() {
+  clearTimeout(sidebarRefreshTimer);
+  sidebarRefreshTimer = setTimeout(() => renderSidebar(), 120);
 }
 function renderSidebar() {
+  clearTimeout(sidebarRefreshTimer);
   dismissFileMenu?.();
   const host = $("#sidebar-content");
   const fileFilter = $<HTMLInputElement>("#file-filter");
@@ -682,29 +768,48 @@ function renderSidebar() {
     host.innerHTML = results.join("") || `<div class="sidebar-empty">${tr("当前文档没有匹配内容")}</div>`;
     return;
   }
-  if (!workspace) {
+  let roots = sidebarRoots();
+  const detailed = !!query || prefs.fileView === "list";
+  clearTimeout(directoryListingTimer);
+  if (detailed && native && roots.some(root => !directoryListingCache.peek(root.root))) {
+    const missing = roots.filter(root => !directoryListingCache.peek(root.root));
+    directoryListingTimer = setTimeout(() => {
+      void Promise.all(missing.map(root => directoryListingCache.load(root.root, () => invoke<Workspace>("list_directory", { path: root.root, recursive: true })))).then(() => renderSidebar()).catch(fail);
+    }, 150);
+  }
+  if (detailed) roots = roots.map(root => directoryListingCache.peek(root.root) ?? root);
+  const children = (entry: FileEntry) => detailed && entry.children.length ? entry.children : directoryChildren(entry);
+  if (!roots.length) {
     host.innerHTML = `<button class="file-row ${!current() ? "active" : ""}" data-action="welcome">${icon("notebook-pen")}<span>${tr("起始页")}</span></button><div class="sidebar-empty"><span class="empty-illustration">${icon("folder-open")}</span><p>${tr("你的文字，留在本地")}</p><span>${tr("打开笔记文件夹，")}<br>${tr("开始一次专注的写作。")}</span><button data-action="folder">${tr("打开文件夹")} ${icon("arrow-up-right")}</button></div>`;
     icons();
     return;
   }
-  const row = (e: FileEntry, depth: number): string => {
-    const matches =
-      !query ||
-      e.name.toLowerCase().includes(query) ||
-      e.children.some((c) =>
-        flatten([c]).some((f) => f.name.toLowerCase().includes(query)),
-      );
-    if (!matches) return "";
-    if (e.directory)
-      return `<button class="file-row folder-row" style="padding-left:${12 + depth * 14}px" data-folder="${escapeHtml(e.path)}">${icon(collapsed.has(e.path) ? "chevron-right" : "chevron-down")}${icon("folder")}<span>${escapeHtml(e.name)}</span></button>${!collapsed.has(e.path) || query ? e.children.map((c) => row(c, depth + 1)).join("") : ""}`;
-    return `<button class="file-row ${current()?.path === e.path ? "active" : ""}" style="padding-left:${17 + depth * 14}px" data-file="${escapeHtml(e.path)}" title="${escapeHtml(e.path)}">${icon("file-text")}<span>${escapeHtml(e.name.replace(/\.md$/, ""))}</span>${tabs.some((t) => t.path === e.path && t.dirty) ? '<span class="dirty-dot"></span>' : ""}</button>`;
+  // Filter once bottom-up, avoiding repeated subtree flattening for every ancestor.
+  const matches = new Set<string>();
+  const visit = (items: FileEntry[]): boolean => {
+    let found = false;
+    for (const entry of items) {
+      const childMatch = visit(children(entry));
+      if (!query || entry.name.toLowerCase().includes(query) || childMatch) { matches.add(entry.path); found = true; }
+    }
+    return found;
   };
-  host.innerHTML =
-    (prefs.fileView === "list" ? flatten(workspace.entries).filter(e => !query || e.path.toLowerCase().includes(query)).map(e => {
-      const relative = parentPath(e.path).slice(workspace!.root.length).replace(/^[\\/]/, "").replace(/\\/g, " / ");
-      return `<button class="file-row flat-file-row ${current()?.path === e.path ? "active" : ""}" data-file="${escapeHtml(e.path)}" title="${escapeHtml(e.path)}">${icon("file-text")}<span class="flat-file-label"><span>${escapeHtml(e.name.replace(/\.md$/, ""))}</span>${relative ? `<small>${escapeHtml(relative)}</small>` : ""}</span>${tabs.some(t => t.path === e.path && t.dirty) ? '<span class="dirty-dot"></span>' : ""}</button>`;
-    }).join("") : workspace.entries.map((e) => row(e, 0)).join("")) ||
-    `<div class="sidebar-empty">${tr("没有匹配的笔记")}</div>`;
+  if (query) for (const root of roots) visit(root.entries);
+  const dirtyPaths = new Set(tabs.filter(tab => tab.dirty && tab.path).map(tab => tab.path));
+  const row = (e: FileEntry, depth: number, listRoot?: string): string => {
+    if (query && !listRoot && !matches.has(e.path)) return "";
+    if (e.directory) {
+      const lazy = !directoryCache.peek(e.path) && !e.children.length;
+      const closed = collapsed.has(e.path) || lazy;
+      return `<button class="file-row folder-row" style="padding-left:${12 + depth * 14}px" data-folder="${escapeHtml(e.path)}">${icon(closed ? "chevron-right" : "chevron-down")}${icon("folder")}<span>${escapeHtml(e.name)}</span></button>${!closed || query ? children(e).map(c => row(c, depth + 1)).join("") : ""}`;
+    }
+    const relative = listRoot ? parentPath(e.path).slice(listRoot.length).replace(/^[\\/]/, "").replace(/\\/g, " / ") : "";
+    return `<button class="file-row ${listRoot ? "flat-file-row" : ""} ${current()?.path === e.path ? "active" : ""}" style="padding-left:${17 + depth * 14}px" data-file="${escapeHtml(e.path)}" title="${escapeHtml(displayPath(e.path))}">${icon(fileGlyph(e.path))}<span class="flat-file-label"><span>${escapeHtml(isNoteFile(e.name) ? e.name.replace(/\.md$/i, "") : e.name)}</span>${relative ? `<small>${escapeHtml(relative)}</small>` : ""}</span>${dirtyPaths.has(e.path) ? '<span class="dirty-dot"></span>' : ""}</button>`;
+  };
+  const list = (items: FileEntry[]): FileEntry[] => items.flatMap(entry => entry.directory ? list(children(entry)) : [entry]);
+  host.innerHTML = roots.map(root => `<section data-directory-root="${escapeHtml(root.root)}"><div class="sidebar-directory-heading" title="${escapeHtml(displayPath(root.root))}">${escapeHtml(root.name || root.root)}</div>${
+    (prefs.fileView === "list" ? list(root.entries).filter(e => !query || e.path.toLowerCase().includes(query)).map(e => row(e, 0, root.root)).join("") : root.entries.map(e => row(e, 0)).join("")) || `<div class="sidebar-empty">${tr("没有匹配的笔记")}</div>`
+  }</section>`).join("");
   icons();
 }
 let tabsMarkup = "";
@@ -735,7 +840,7 @@ function updateWordCount(tab: Tab) {
     $("#word-count").textContent = tr("{0} 字 · 约 {1} 分钟阅读", [cached.count.toLocaleString(prefs.language), Math.max(1, Math.ceil(cached.count / 450))]);
     $("#word-count").removeAttribute("aria-busy");
   };
-  if (tab.text.length > 20000 && wordCounts.get(tab)?.revision !== tab.revision) {
+  if (tab.source.doc.length > 20000 && wordCounts.get(tab)?.revision !== tab.revision) {
     $("#word-count").setAttribute("aria-busy", "true");
     wordCountTimer = setTimeout(render, 120);
   } else render();
@@ -806,15 +911,15 @@ function mountTab(tab: Tab) {
   tab.host = document.createElement("div");
   tab.host.className = "tab-editor";
   $("#editor-stage").append(tab.host);
-  tab.editor = new NoteEditor(tab.host, tab.text, {
-    change: (text) => {
-      tab.text = text;
+  tab.editor = new NoteEditor(tab.host, tab.source.doc, {
+    change: (doc) => {
+      tab.source.update(doc);
       tab.revision++;
-      tab.dirty = text !== tab.base;
+      tab.dirty = !tab.source.matches(tab.base);
       if (tab.id === activeId) {
         renderTabs();
         status(false);
-        if (side === "outline" || side === "search") renderSidebar();
+        if (side === "outline" || side === "search") scheduleSidebarRefresh();
         scheduleRender();
       }
       scheduleRecovery();
@@ -831,7 +936,8 @@ function mountTab(tab: Tab) {
       }
     },
     save: () => void save(tab),
-    image: (file) => void insertImage(file, tab),
+    image: (file) => void insertImages([file], tab),
+    images: (files) => void insertImages(files, tab),
     command: runEditorContextAction,
     formatting: () => { if (tab.id === activeId) editorToolbar?.refresh(); },
   });
@@ -850,7 +956,7 @@ function activate(id: string) {
   mountTab(tab);
   for (const t of tabs) if (t.host) t.host.hidden = t.id !== id;
   renderTabs();
-  renderSidebar();
+  void syncDocumentDirectory();
   status();
   showConflict();
   scheduleRender();
@@ -871,7 +977,9 @@ function addTab(doc?: DiskDocument, text = "") {
     id: crypto.randomUUID(),
     name: doc ? doc.path.split(/[\\/]/).pop()! : tr("未命名.md"),
     path: doc?.path,
-    text: body,
+    source: new DocumentText(body),
+    get text() { return this.source.text; },
+    set text(value: string) { this.source.text = value; },
     revision: 0,
     base: body,
     hash: doc?.hash || "new",
@@ -933,6 +1041,18 @@ function showStartPage() {
       }
     }).catch(() => {});
   }
+}
+async function openSidebarFile(path: string): Promise<boolean> {
+  if (isNoteFile(path)) return openFile(path);
+  if (!requireNative()) return false;
+  try {
+    if (isPictureFile(path)) {
+      const data = await invoke<string>("read_asset", { document: path, relative: path.split(/[\\/]/).pop()! });
+      closeModal();
+      modal(path.split(/[\\/]/).pop()!, `<div class="attachment-preview"><img src="${escapeHtml(data)}" alt="${escapeHtml(path.split(/[\\/]/).pop()!)}"></div>`);
+    } else await invoke("reveal_entry", { path });
+  } catch (error) { fail(error); }
+  return false;
 }
 async function openFile(path?: string): Promise<boolean> {
   if (!requireNative()) return false;
@@ -999,6 +1119,7 @@ async function clearRecentHistory() {
 }
 async function setWorkspace(next: Workspace, remember = true) {
   workspace = next;
+  void syncDocumentDirectory();
   for (const tab of tabs) {
     tab.plan = undefined;
   }
@@ -1011,6 +1132,7 @@ async function setWorkspace(next: Workspace, remember = true) {
     ].slice(0, 10);
   persistPrefs();
   $("#workspace-name").textContent = next.name;
+  $("#workspace-name").title = displayPath(next.root);
   renderSidebar();
   status();
   if (!current()) renderStartPage();
@@ -1027,27 +1149,35 @@ async function chooseFolder() {
     fail(e);
   }
 }
-async function refresh() {
-  if (!workspace) return;
+async function refresh(path?: string) {
+  if (!sidebarRoots().length) return;
   try {
-    await setWorkspace(await invoke<Workspace>("refresh_workspace"), false);
+    const paths = new Set(path ? [path] : sidebarRoots().map(root => root.root));
+    const collect = (items: FileEntry[]) => {
+      for (const entry of items) if (entry.directory && !collapsed.has(entry.path) && directoryCache.peek(entry.path)) {
+        paths.add(entry.path); collect(directoryChildren(entry));
+      }
+    };
+    if (!path) for (const root of sidebarRoots()) collect(root.entries);
+    await Promise.all([...paths].map(refreshDirectory));
   } catch (e) {
     fail(e);
   }
 }
 function fileTarget(element: Element): { target: FileTarget; origin: HTMLElement } | undefined {
-  if (!workspace || side !== "files") return;
+  if (!sidebarRoots().length || side !== "files") return;
   const origin = element.closest<HTMLElement>("[data-file], [data-folder]") ?? $("#sidebar-content");
   const path = origin.dataset.file ?? origin.dataset.folder;
-  if (!path) return { origin, target: { path: workspace.root, name: workspace.name, kind: "root" } };
+  const root = sidebarRoots().find(root => root.root === element.closest<HTMLElement>("[data-directory-root]")?.dataset.directoryRoot) ?? sidebarRoots()[0];
+  if (!path) return { origin, target: { path: root.root, name: root.name, kind: "root" } };
   const find = (entries: FileEntry[]): FileEntry | undefined => {
     for (const entry of entries) {
       if (entry.path === path) return entry;
-      const match = find(entry.children);
+      const match = find(directoryChildren(entry));
       if (match) return match;
     }
   };
-  const entry = find(workspace.entries);
+  const entry = find(root.entries) ?? find(directoryListingCache.peek(root.root)?.entries ?? []);
   if (entry) return { origin, target: { path, name: entry.name, kind: entry.directory ? "folder" : "file" } };
 }
 function showFileMenu(element: Element, x: number, y: number) {
@@ -1089,7 +1219,7 @@ async function fileAction(action: FileAction, target: FileTarget) {
   if (!requireNative()) return;
   const parent = target.kind === "file" ? parentPath(target.path) : target.path;
   try {
-    if (action === "open") { await openFile(target.path); return; }
+    if (action === "open") { await openSidebarFile(target.path); return; }
     if (action === "window") {
       const tab = tabs.find(tab => tab.path === target.path);
       if (tab?.dirty) {
@@ -1104,7 +1234,7 @@ async function fileAction(action: FileAction, target: FileTarget) {
     if (action === "folder") {
       const name = await inputDialog(tr("新建文件夹"), tr("文件夹名称"), tr("未命名文件夹"));
       if (!name) return;
-      await invoke("create_folder", { parent, name }); collapsed.delete(parent); await refresh(); return;
+      await invoke("create_folder", { parent, name }); collapsed.delete(parent); await refresh(parent); return;
     }
     if (action === "reveal") { await invoke("reveal_entry", { path: target.path }); return; }
     if (action === "properties") {
@@ -1112,7 +1242,7 @@ async function fileAction(action: FileAction, target: FileTarget) {
       const date = (value: number | null) => value == null ? tr("未知") : new Date(value * 1000).toLocaleString(getLanguage());
       closeModal();
       const displayPath = info.path.replace(/^\\\\\?\\UNC\\/, "\\\\").replace(/^\\\\\?\\/, "");
-      modal(tr("属性"), `<dl class="file-properties"><dt>${tr("名称")}</dt><dd data-user-content>${escapeHtml(target.name)}</dd><dt>${tr("类型")}</dt><dd>${tr(info.directory ? "文件夹" : "笔记文件")}</dd><dt>${tr("大小")}</dt><dd>${info.size == null ? "—" : tr("{0} 字节", [info.size.toLocaleString(getLanguage())])}</dd><dt>${tr("创建时间")}</dt><dd>${escapeHtml(date(info.created))}</dd><dt>${tr("修改时间")}</dt><dd>${escapeHtml(date(info.modified))}</dd><dt>${tr("路径")}</dt><dd data-user-content class="file-property-path">${escapeHtml(displayPath)}</dd></dl><div class="modal-actions"><button id="property-copy">${tr("复制文件路径")}</button><button class="primary" data-dismiss>${tr("完成")}</button></div>`);
+      modal(tr("属性"), `<dl class="file-properties"><dt>${tr("名称")}</dt><dd data-user-content>${escapeHtml(target.name)}</dd><dt>${tr("类型")}</dt><dd>${tr(info.directory ? "文件夹" : isNoteFile(target.path) ? "笔记文件" : "附件")}</dd><dt>${tr("大小")}</dt><dd>${info.size == null ? "—" : tr("{0} 字节", [info.size.toLocaleString(getLanguage())])}</dd><dt>${tr("创建时间")}</dt><dd>${escapeHtml(date(info.created))}</dd><dt>${tr("修改时间")}</dt><dd>${escapeHtml(date(info.modified))}</dd><dt>${tr("路径")}</dt><dd data-user-content class="file-property-path">${escapeHtml(displayPath)}</dd></dl><div class="modal-actions"><button id="property-copy">${tr("复制文件路径")}</button><button class="primary" data-dismiss>${tr("完成")}</button></div>`);
       $("#property-copy").onclick = () => { void copyFilePath(info.path).catch(fail); };
       return;
     }
@@ -1126,14 +1256,14 @@ async function fileAction(action: FileAction, target: FileTarget) {
         if (choice === "cancel" || choice === "save" && !await save(tab)) return;
       }
       const doc = await invoke<DiskDocument>("duplicate_note", { path: target.path, suffix: tr("副本") });
-      addTab(doc); await rememberRecentFile(doc.path); await refresh(); return;
+      addTab(doc); await rememberRecentFile(doc.path); await refresh(parent); return;
     }
     if (action === "rename") {
       let name = await inputDialog(tr("重命名"), tr("新名称"), target.name, tr("重命名"));
       if (!name || name === target.name) return;
       if (target.kind === "file") {
         if (!name.includes(".")) name += target.name.match(/\.[^.]+$/)?.[0] ?? ".md";
-        if (!/\.(md|markdown|txt)$/i.test(name)) throw new Error(tr("笔记文件请保留 .md、.markdown 或 .txt 扩展名。"));
+        if (isNoteFile(target.path) && !/\.(md|markdown|txt)$/i.test(name)) throw new Error(tr("笔记文件请保留 .md、.markdown 或 .txt 扩展名。"));
       }
       if (tabs.some(tab => isWithin(tab.path, target.path) && tab.saving)) { toast(tr("请等待保存完成后再操作。"), true); return; }
       clearTimeout(saveTimer); fileOperationBusy = true;
@@ -1145,7 +1275,8 @@ async function fileAction(action: FileAction, target: FileTarget) {
       closedFiles = closedFiles.map(path => renamedPath(path, target.path, destination));
       startRecentFiles = startRecentFiles.map(path => renamedPath(path, target.path, destination));
       collapsed = new Set([...collapsed].map(path => renamedPath(path, target.path, destination)));
-      renderedKey = ""; renderTabs(); status(); scheduleRender(); await persistRecovery(); await refresh();
+      renderedKey = ""; renderTabs(); status(); scheduleRender(); await persistRecovery(); await refresh(parentPath(target.path));
+      void syncDocumentDirectory();
       if (native && current()) void getCurrentWindow().setTitle(`${current()!.name} - ZNote`);
       toast(tr("已重命名")); return;
     }
@@ -1167,13 +1298,13 @@ async function fileAction(action: FileAction, target: FileTarget) {
       if (!tabs.length) showStartPage();
       else if (!tabs.some(tab => tab.id === activeId) && activeId) activate(tabs[tabs.length - 1].id);
       else { renderTabs(); status(); showConflict(); scheduleRender(); if (current()) void getCurrentWindow().setTitle(`${current()!.name} - ZNote`); }
-      await persistRecovery(); await refresh(); toast(tr("已移入回收站"));
+      await persistRecovery(); await refresh(parentPath(target.path)); toast(tr("已移入回收站"));
     }
   } catch (e) { fail(e); }
   finally { fileOperationBusy = false; }
 }
 async function newNote(parent?: string) {
-  if (!workspace) {
+  if (!workspace && !parent) {
     if (mode === "read") setMode("source");
     addTab().editor?.view.focus();
     return;
@@ -1189,7 +1320,7 @@ async function newNote(parent?: string) {
     if (mode === "read") setMode("source");
     addTab(doc).editor?.view.focus();
     await rememberRecentFile(doc.path);
-    await refresh();
+    await refresh(parentPath(doc.path));
   } catch (e) {
     fail(e);
   }
@@ -1224,7 +1355,7 @@ async function save(
     if (!doc) return false;
     const previousPath = tab.path;
     tab.path = doc.path;
-    if (previousPath !== doc.path) await rememberRecentFile(doc.path);
+    if (previousPath !== doc.path) { await rememberRecentFile(doc.path); void syncDocumentDirectory(); }
     tab.name = doc.path.split(/[\\/]/).pop()!;
     tab.hash = doc.hash;
     tab.bom = doc.bom;
@@ -1533,31 +1664,39 @@ async function renderPreviewNow(generation: number) {
     $("#preview-warnings").textContent = String(e);
   }
 }
-async function insertImage(file: File, tab = current()) {
-  if (!tab?.editor) return;
-  if (!tab.path) {
-    toast(tr("请先保存笔记，再插入图片。"), true);
-    return;
-  }
-  const editor = tab.editor;
-  const saved = captureEditorSelection(editor.view);
+async function insertImages(files: File[], tab = current(), saved = tab?.editor ? captureEditorSelection(tab.editor.view) : undefined) {
+  if (!tab?.editor || !saved || !files.length || !requireNative()) return;
+  const settings = { ...prefs.images };
   try {
-    const extension = file.type.split("/")[1].replace("jpeg", "jpg");
-    const relative = await invoke<string>("import_image", {
-      document: tab.path,
-      bytes: Array.from(new Uint8Array(await file.arrayBuffer())),
-      extension,
-    });
-    const view = current()?.editor?.view;
-    if (view !== saved.view) return;
-    if (!restoreEditorSelection(saved, view)) {
+    const extensions = files.map(imageExtension);
+    if (!tab.path && !(await save(tab))) return;
+    if (!tab.path || !restoreEditorSelection(saved, current()?.editor?.view)) return;
+    const documentPath = tab.path;
+    const markdown: string[] = [];
+    for (const [index, file] of files.entries()) {
+      const path = await invoke<string>("import_image", {
+        document: documentPath,
+        bytes: Array.from(new Uint8Array(await file.arrayBuffer())),
+        extension: extensions[index],
+        folder: settings.folder,
+        relative: settings.relative,
+      });
+      markdown.push(imageMarkdown(file.name, path, settings));
+    }
+    if (current()?.editor?.view !== saved.view) return;
+    if (tab.path !== documentPath || !restoreEditorSelection(saved, current()?.editor?.view)) {
       toast(tr("笔记已变化，请重新插入。"), true);
       return;
     }
-    editor.insert(`![${file.name.replace(/[\[\]]/g, "")}](${relative})`);
-  } catch (e) {
-    fail(e);
-  }
+    tab.editor.insert(markdown.join("\n"));
+    const parent = parentPath(documentPath);
+    await refreshDirectory(parent);
+    if (settings.folder !== "same") {
+      const folder = settings.folder === "assets" ? "assets" : documentPath.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, "") + ".assets";
+      const assetPath = `${parent}/${folder}`;
+      if (directoryCache.peek(assetPath)) await refreshDirectory(assetPath);
+    }
+  } catch (e) { fail(e); }
 }
 
 function modal(title: string, body: string) {
@@ -1665,8 +1804,9 @@ function showSettings() {
     tr("设置"),
     `
   <div class="settings-layout">${settingsNavigationMarkup()}<div class="settings-content">
-  <div data-settings-panel="appearance">${settingsPageHeading("appearance")}<div class="settings-section"><h3>${tr("语言")}</h3><div class="setting-row"><label for="language-choice">${tr("界面语言")}</label><select id="language-choice">${Object.entries(languagePacks).map(([id, pack]) => `<option value="${id}">${pack.name}</option>`).join("")}</select></div><p class="muted">${tr("语言更改立即生效，不会修改笔记内容。")}</p></div><div class="settings-section"><h3>${tr("界面主题")}</h3><div class="setting-row"><label for="theme-choice">${tr("颜色模式")}</label><select id="theme-choice"><option value="light">${tr("亮色")}</option><option value="dark">${tr("暗色")}</option><option value="system">${tr("跟随系统")}</option></select></div>${themeSettingsMarkup(prefs.themeBindings)}</div><div class="settings-section"><h3>${tr("文字显示")}</h3><div class="setting-row"><label for="font-size">${tr("正文字号")}</label><div><input id="font-size" type="range" min="14" max="24" value="${prefs.fontSize}"><span id="font-value">${prefs.fontSize}px</span></div></div></div></div>
+  <div data-settings-panel="appearance">${settingsPageHeading("appearance")}<div class="settings-section"><h3>${tr("语言")}</h3><div class="setting-row"><label for="language-choice">${tr("界面语言")}</label><select id="language-choice">${Object.entries(languagePacks).map(([id, pack]) => `<option value="${id}">${pack.name}</option>`).join("")}</select></div><p class="muted">${tr("语言更改立即生效，不会修改笔记内容。")}</p></div><div class="settings-section"><h3>${tr("界面主题")}</h3><div class="setting-row"><label for="theme-choice">${tr("颜色模式")}</label><select id="theme-choice"><option value="light">${tr("亮色")}</option><option value="dark">${tr("暗色")}</option><option value="system">${tr("跟随系统")}</option></select></div>${themeSettingsMarkup(prefs.themeBindings)}</div><div class="settings-section"><h3>${tr("文字显示")}</h3><div class="setting-row"><label for="editor-font-size">${tr("编辑区字号")}</label><div><input id="editor-font-size" type="range" min="14" max="24" value="${prefs.editorFontSize}"><span id="editor-font-value">${prefs.editorFontSize}px</span></div></div><div class="setting-row"><label for="reader-font-size">${tr("阅读区字号")}</label><div><input id="reader-font-size" type="range" min="14" max="24" value="${prefs.readerFontSize}"><span id="reader-font-value">${prefs.readerFontSize}px</span></div></div></div></div>
   ${renderSettingsMarkup(prefs.render)}
+  ${imageSettingsMarkup(prefs.images)}
   <div data-settings-panel="files" hidden>${settingsPageHeading("files")}${fileOpeningMarkup(prefs.fileOpening)}</div>
   <div data-settings-panel="updates" hidden>${settingsPageHeading("updates")}${updateSettingsMarkup(prefs.autoCheckUpdates)}</div>
   <div data-settings-panel="writing" hidden>${settingsPageHeading("writing")}<div class="settings-section"><h3>${tr("对照模式同步")}</h3><label class="setting-row"><span>${tr("编辑时预览跟随光标")}<small>${tr("对照模式中，预览定位到光标所在段落。")}</small></span><input id="sync-preview" type="checkbox" ${prefs.syncPreview ? "checked" : ""}></label><label class="setting-row"><span>${tr("滚动预览时编辑区跟随")}<small>${tr("对照模式中，编辑区定位到预览正文对应位置。")}</small></span><input id="sync-editor-scroll" type="checkbox" ${prefs.syncEditorScroll ? "checked" : ""}></label></div><div class="settings-section"><h3>${tr("保存与恢复")}</h3><label class="setting-row"><span>${tr("自动保存已命名笔记")}<small>${tr("停顿后保存；检测到外部修改时暂停。")}</small></span><input id="autosave" type="checkbox" ${prefs.autosave ? "checked" : ""}></label><p class="muted">${tr("未保存的内容会自动保存本地恢复快照。快捷键 Ctrl+S 可随时保存原文件。")}</p></div></div>
@@ -1690,6 +1830,14 @@ function showSettings() {
     status();
   });
   $("#modal-root .modal").classList.add("render-settings-modal");
+  $<HTMLSelectElement>("#image-folder").value = prefs.images.folder;
+  document.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-image-setting]").forEach(input => {
+    input.onchange = () => {
+      const key = input.dataset.imageSetting!;
+      prefs.images = normalizeImageSettings({ ...prefs.images, [key]: input instanceof HTMLInputElement ? input.checked : input.value });
+      persistPrefs();
+    };
+  });
   const disposeNavigation = mountSettingsNavigation($("#modal-root .modal"));
   const disposeUpdates = mountUpdateSettings($("#modal-root .modal"), value => { prefs.autoCheckUpdates = value; persistPrefs(); });
   const openingSelects = { "external-open-mode": "mode", "external-open-target": "target", "startup-behavior": "startup" } as const;
@@ -1729,11 +1877,13 @@ function showSettings() {
       applyPrefs();
     };
   });
-  $("#font-size").oninput = (e) => {
-    prefs.fontSize = Number((e.target as HTMLInputElement).value);
-    $("#font-value").textContent = prefs.fontSize + "px";
-    applyPrefs();
-  };
+  for (const [id, key] of [["editor", "editorFontSize"], ["reader", "readerFontSize"]] as const) {
+    $(`#${id}-font-size`).oninput = (e) => {
+      prefs[key] = normalizeFontSize(Number((e.target as HTMLInputElement).value), initial[key]);
+      $(`#${id}-font-value`).textContent = prefs[key] + "px";
+      applyPrefs();
+    };
+  }
   $("#autosave").onchange = (e) => {
     prefs.autosave = (e.target as HTMLInputElement).checked;
     persistPrefs();
@@ -1894,7 +2044,7 @@ function openIconPicker(target?: HTMLInputElement) {
       status.textContent = icons.length ? tr("找到 {0} 个候选（最多显示 64 个）", [icons.length]) : tr("没有找到图标，请换个关键词");
       grid.innerHTML = icons.map((item, index) =>
         `<button type="button" class="icon-picker-result" data-icon-index="${index}" title="${escapeHtml(item.shortcode)}" aria-label="${tr(target ? "选择图标" : "插入")} ${escapeHtml(item.shortcode)}">
-          <span class="icon-picker-preview"><img data-preview-index="${index}" alt="" width="28" height="28"></span>
+          <span class="icon-picker-preview" aria-hidden="true"><span class="icon-picker-glyph" data-preview-index="${index}"></span></span>
           <span class="icon-picker-name">${escapeHtml(item.label)}</span>
           <span class="icon-picker-source">${escapeHtml(item.collection)}</span>
         </button>`,
@@ -1902,27 +2052,32 @@ function openIconPicker(target?: HTMLInputElement) {
       setSearching(false);
       const loader = new IconPreviewLoader();
       previewLoader = loader;
-      const loadPreview = (image: HTMLImageElement) => {
-        const item = icons[Number(image.dataset.previewIndex)];
+      const loadPreview = (glyph: HTMLElement) => {
+        const item = icons[Number(glyph.dataset.previewIndex)];
         if (!item) return;
         void loader.load(item.previewUrl).then((src) => {
-          if (previewLoader === loader && image.isConnected) image.src = src;
+          if (previewLoader === loader && glyph.isConnected) {
+            // The supported collections are monochrome; reuse the cached SVG
+            // as an alpha mask so theme changes only need to update CSS color.
+            glyph.style.setProperty("--icon-preview", `url("${src}")`);
+            glyph.classList.add("preview-loaded");
+          }
         }).catch(() => {
-          if (previewLoader === loader && image.isConnected)
-            image.closest(".icon-picker-result")?.classList.add("preview-error");
+          if (previewLoader === loader && glyph.isConnected)
+            glyph.closest(".icon-picker-result")?.classList.add("preview-error");
         });
       };
-      const images = grid.querySelectorAll<HTMLImageElement>("img[data-preview-index]");
-      if (typeof IntersectionObserver === "undefined") images.forEach(loadPreview);
+      const glyphs = grid.querySelectorAll<HTMLElement>(".icon-picker-glyph[data-preview-index]");
+      if (typeof IntersectionObserver === "undefined") glyphs.forEach(loadPreview);
       else {
         previewObserver = new IntersectionObserver((entries, observer) => {
           for (const entry of entries) {
             if (!entry.isIntersecting) continue;
             observer.unobserve(entry.target);
-            loadPreview(entry.target as HTMLImageElement);
+            loadPreview(entry.target as HTMLElement);
           }
         }, { root: grid, rootMargin: "120px 0px" });
-        images.forEach((image) => previewObserver!.observe(image));
+        glyphs.forEach((glyph) => previewObserver!.observe(glyph));
       }
     } catch (error) {
       if (next.signal.aborted || !root.isConnected) return;
@@ -2104,7 +2259,7 @@ function showEditorContextMenu(event: MouseEvent) {
       tr("复制 / 粘贴为…"),
       [
         contextButton(tr("复制 Markdown"), "copy", "Ctrl+C", !selected),
-        contextButton(tr("粘贴纯文本"), "paste", "Ctrl+V"),
+        contextButton(tr("粘贴纯文本"), "paste-text"),
         contextButton(tr("粘贴为引用"), "paste-quote"),
       ].join(""),
     ),
@@ -2216,6 +2371,14 @@ async function editorClipboard(action: string, editor: NoteEditor) {
     return;
   }
   try {
+    if (action === "paste") {
+      const saved = captureEditorSelection(view);
+      const files = await readClipboardImages(native);
+      if (files.length) {
+        if (restoreEditorSelection(saved, current()?.editor?.view)) await insertImages(files, current(), saved);
+        return;
+      }
+    }
     // WebView clipboard-read permission is separate from native Ctrl+V.
     // Desktop menu actions use the OS clipboard through Tauri instead.
     const clipboardText = await (native
@@ -2240,6 +2403,11 @@ function runEditorContextAction(action: string) {
   const editor = current()?.editor;
   if (!editor) return;
   closeEditorContextMenu();
+  if (selectionInFrontMatter(editor.view.state) && editorCommand(action) &&
+      action !== "yaml" && action !== "settings") {
+    toast(tr("YAML 属性区域不应用 Markdown 格式"));
+    return;
+  }
   if (action === "icons") {
     openIconPicker();
     return;
@@ -2255,7 +2423,7 @@ function runEditorContextAction(action: string) {
     applyEditorTransaction(view, command.transaction(view.state));
     return;
   }
-  if (["copy", "cut", "paste", "paste-quote"].includes(action)) {
+  if (["copy", "cut", "paste", "paste-text", "paste-quote"].includes(action)) {
     void editorClipboard(action, editor);
     return;
   }
@@ -2273,7 +2441,7 @@ function runEditorContextAction(action: string) {
     const text = view.state.sliceDoc(from, to) || tr("链接文字");
     editor.insert(`[${text}](https://)`);
   } else if (action === "yaml") {
-    if (view.state.doc.sliceString(0, 4) === "---\n") {
+    if (view.state.doc.line(1).text.trim() === "---") {
       toast(tr("文档已有 YAML Front Matter"));
       return;
     }
@@ -2380,7 +2548,9 @@ async function printCurrent() {
     host.className = "print-surface-host";
     host.setAttribute("aria-hidden", "true");
     document.body.append(host);
-    surface = new PreviewSurface();
+    // Auto-themed diagrams must use the same light palette as the printed text.
+    if (result.plan?.mermaid?.theme === "auto") result.plan.mermaid.theme = "neutral";
+    surface = new PreviewSurface({ print: true });
     await surface.render(host, result, path, () => {}, {
       source,
       documentId: tab.id,
@@ -2412,6 +2582,7 @@ const actions: Record<string, () => unknown> = {
   "close-workspace": async () => {
     if (native) await invoke("close_workspace");
     workspace = undefined;
+    void syncDocumentDirectory();
     prefs.lastWorkspace = undefined;
     persistPrefs();
     for (const tab of tabs) {
@@ -2544,7 +2715,7 @@ document.addEventListener("click", (e) => {
   }
   const file = target.closest<HTMLElement>("[data-file]");
   if (file) {
-    void openFile(file.dataset.file).then(() => {
+    void openSidebarFile(file.dataset.file!).then(() => {
       const line = Number(file.dataset.line);
       const editor = current()?.editor;
       if (line && editor)
@@ -2559,8 +2730,12 @@ document.addEventListener("click", (e) => {
   const folder = target.closest<HTMLElement>("[data-folder]");
   if (folder) {
     const p = folder.dataset.folder!;
-    collapsed.has(p) ? collapsed.delete(p) : collapsed.add(p);
-    renderSidebar();
+    if (!directoryCache.peek(p)) {
+      void directoryCache.load(p, () => invoke<Workspace>("list_directory", { path: p })).then(() => { collapsed.delete(p); renderSidebar(); }).catch(fail);
+    } else {
+      collapsed.has(p) ? collapsed.delete(p) : collapsed.add(p);
+      renderSidebar();
+    }
     return;
   }
   const jump = target.closest<HTMLElement>("[data-jump]");
@@ -2619,11 +2794,11 @@ document.addEventListener(
 $("#file-filter").oninput = renderSidebar;
 $("#sidebar-content").tabIndex = -1;
 $("#sidebar-content").addEventListener("contextmenu", event => {
-  if (!workspace || side !== "files") return;
+  if (!sidebarRoots().length || side !== "files") return;
   event.preventDefault(); showFileMenu(event.target as Element, event.clientX, event.clientY);
 });
 $("#sidebar-content").addEventListener("keydown", event => {
-  if (!workspace || side !== "files" || event.isComposing) return;
+  if (!sidebarRoots().length || side !== "files" || event.isComposing) return;
   const target = fileTarget(event.target as Element);
   if (!target) return;
   if (event.key === "ContextMenu" || event.key === "F10" && event.shiftKey) {
@@ -2656,8 +2831,8 @@ $("#preview-find").addEventListener("click", (event) => {
 });
 $<HTMLInputElement>("#image-picker").onchange = (e) => {
   const input = e.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (file) void insertImage(file);
+  const files = Array.from(input.files || []);
+  if (files.length) void insertImages(files);
   input.value = "";
 };
 let copyToast: HTMLElement | undefined;

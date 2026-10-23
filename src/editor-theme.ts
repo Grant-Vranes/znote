@@ -1,8 +1,10 @@
-import { HighlightStyle } from "@codemirror/language";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { yamlLanguage } from "@codemirror/lang-yaml";
 import { tags } from "@lezer/highlight";
 
-/** Semantic classes keep syntax colors in sync with CSS theme changes. */
-export const editorHighlightStyle = HighlightStyle.define([
+// Shared semantics retain the same colors across Markdown and embedded languages.
+// Language-specific meanings of broad tags belong in a scoped style below.
+const sharedHighlightStyle = HighlightStyle.define([
   { tag: tags.heading, fontWeight: "bold", textDecoration: "underline" },
   { tag: tags.emphasis, fontStyle: "italic" },
   { tag: tags.strong, fontWeight: "bold" },
@@ -17,3 +19,15 @@ export const editorHighlightStyle = HighlightStyle.define([
   { tag: [tags.link, tags.url], class: "zn-syntax-link" },
   { tag: [tags.invalid, tags.deleted], class: "zn-syntax-invalid" },
 ]);
+
+// These tags also describe Markdown prose and HTML/CSS/JavaScript properties.
+// Restrict YAML scalar/key colors to the YAML tree, including nested mappings.
+const yamlHighlightStyle = HighlightStyle.define([
+  { tag: tags.content, class: "zn-syntax-string" },
+  { tag: tags.propertyName, class: "zn-syntax-selector" },
+], { scope: yamlLanguage });
+
+// One source of truth for the editor extensions and syntax-tree consumers.
+// Semantic CSS classes let theme changes update colors without rebuilding these.
+export const editorHighlighters = [sharedHighlightStyle, yamlHighlightStyle] as const;
+export const editorSyntaxHighlighting = editorHighlighters.map(style => syntaxHighlighting(style));

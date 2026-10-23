@@ -31,6 +31,55 @@ samples = {
 rich = '# 一级标题 Heading\n\n正文 **粗体**、*斜体*、`inline code`、[链接](https://zensical.org/)、==标记==。\n\n## 二级标题\n\n### 三级标题\n\n> 引用段落\n\n- 列表项目\n- 第二项\n\n有序列表：\n\n1. 有序项目\n\n- [x] 已完成\n- [ ] 待办\n\n---\n\n' + '\n'.join(value for key, value in samples.items() if key != 'regressions')
 samples['rich']=rich
 samples['frontmatter']='---\ntitle: 属性\n---'
+samples['callouts'] = '''# Callouts
+
+> [!NOTE]
+> GitHub note.
+
+> [!TIP]
+> GitHub tip.
+
+> [!IMPORTANT]
+> GitHub important.
+
+> [!WARNING]
+> GitHub warning.
+
+> [!CAUTION]
+> GitHub caution.
+
+> [!tip]+ 展开的 **标题**
+> 展开的正文。
+
+> [!warning]- 收起的提示
+> 收起的正文。
+
+> [!note] 外层提示
+> 重复段落。
+>
+> > [!tip] 内层提示
+> > 重复段落。
+>
+> 重复段落。
+
+> [!example] 代码与列表
+> - 列表项目
+>
+> ```python
+> print("Callout")
+> ```
+
+> 第一段普通引用
+
+> 第二段普通引用
+'''
+samples['sync_callouts'] = ('---\ntitle: Sync 😀\ndescription: |\n'
+    + '\n'.join(f'  Property {i}' for i in range(45)) + '\n---\n\n'
+    + '\n\n'.join(f'Before {i}' for i in range(40)) + '\n\n'
+    + samples['callouts'] + '\n'
+    + '\n\n'.join(f'After {i}' for i in range(40)))
+# Identical metadata and body exercise the preview's unchanged-HTML fast path.
+samples['sync_callouts_updated'] = samples['sync_callouts'].replace('---\n', '---\n\n', 1)
 results={key:render({'text':text, 'settings': {'primary': 'indigo', 'accent': 'indigo'} if key == 'rich' else {}}) for key, text in samples.items()}
 fixtures=Path(__file__).resolve().parent/'fixtures'
 fixtures.mkdir(exist_ok=True)

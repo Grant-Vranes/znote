@@ -1,6 +1,6 @@
 [package]
 name = "znote"
-version = "0.5.7"
+version = "0.5.8"
 description = "A local Markdown editor and reader"
 edition = "2021"
 

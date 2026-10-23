@@ -1,13 +1,13 @@
 {
   "name": "znote",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
     "build": "tsc --noEmit && vite build && node tests/check-package-assets.mjs",
     "tauri": "node scripts/tauri.mjs",
-    "test": "vitest run src",
+    "test": "playwright test",
     "test:browser": "playwright test",
     "test:editor-render": "node tests/check-editor-templates.mjs",
     "styles:sync": "node scripts/sync-zensical-styles.mjs",
@@ -16,7 +16,9 @@
   "dependencies": {
     "@codemirror/autocomplete": "^6.18.0",
     "@codemirror/commands": "^6.8.0",
+    "@codemirror/lang-html": "^6.4.12",
     "@codemirror/lang-markdown": "^6.3.0",
+    "@codemirror/lang-yaml": "^6.1.3",
     "@codemirror/language": "^6.11.0",
     "@codemirror/search": "^6.5.0",
     "@codemirror/state": "^6.5.0",
@@ -25,7 +27,9 @@
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@fontsource-variable/roboto": "^5.3.0",
     "@fontsource-variable/roboto-mono": "^5.3.0",
+    "@lezer/common": "^1.5.3",
     "@lezer/highlight": "^1.2.0",
+    "@lezer/markdown": "^1.8.1",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-clipboard-manager": "^2.5.0",
     "dompurify": "^3.2.0",
@@ -41,7 +45,6 @@
     "postcss": "^8.5.28",
     "prettier": "^3.9.9",
     "typescript": "^5.8.0",
-    "vite": "^6.3.0",
-    "vitest": "^3.1.0"
+    "vite": "^6.3.0"
   }
 }

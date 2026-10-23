@@ -1,5 +1,6 @@
 import { tr } from "./i18n";
 import { escapeHtml } from "./preview";
+import { displayPath } from "./path-display";
 
 const icon = (name: string) => `<i data-lucide="${name}"></i>`;
 
@@ -38,7 +39,8 @@ export function startRecentMarkup(files: readonly string[], folders: readonly st
   ];
   if (!entries.length) return `<div class="start-recent-empty">${icon("notebook-pen")}<p>${tr("还没有最近使用的笔记")}</p><span>${tr("新建或打开笔记后，你可以在这里快速找回它们。")}</span></div>`;
   return entries.map(({ path, kind }) => {
-    const name = path.split(/[\\/]/).pop() || path;
-    return `<button class="start-recent-item" data-recent-${kind}="${escapeHtml(path)}" title="${escapeHtml(path)}">${icon(kind === "file" ? "file-text" : "folder")}<span><strong>${escapeHtml(name)}</strong><small>${escapeHtml(path)}</small></span>${icon("chevron-right")}</button>`;
+    const display = displayPath(path);
+    const name = display.split(/[\\/]/).pop() || display;
+    return `<button class="start-recent-item" data-recent-${kind}="${escapeHtml(path)}" title="${escapeHtml(display)}">${icon(kind === "file" ? "file-text" : "folder")}<span><strong>${escapeHtml(name)}</strong><small>${escapeHtml(display)}</small></span>${icon("chevron-right")}</button>`;
   }).join("");
 }

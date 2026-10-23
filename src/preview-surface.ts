@@ -2,6 +2,7 @@ import { tr, getLanguage, languagePacks, onLanguageChange, localizeUi } from "./
 import { setRendered, applyRenderedTheme } from "./preview";
 import { updateSourceLocations } from "./preview-source-map";
 import { previewAnchors, previewAnchorAt, readingAnchors, readingAnchorAt, lineWithin, isPreviewVisible, type PreviewAnchor, type ReadingAnchor } from "./preview-sync";
+import { localizeDocumentProperties } from "./document-properties";
 import type { RenderResult } from "./types";
 import type { RenderSettings } from "./render-config";
 import { applyAppearanceToResult } from "./render-appearance";
@@ -53,6 +54,8 @@ export class PreviewSurface {
   private cursorTarget?: { source: string; line: number; cause: "editor" | "navigation" };
   onFindShortcut?: () => void;
   onPrintShortcut?: () => void;
+
+  constructor(private readonly options: { print?: boolean } = {}) {}
 
   get followsEditor() { return this.intent === "editor"; }
 
@@ -369,7 +372,9 @@ export class PreviewSurface {
     const scroller = doc.scrollingElement || doc.documentElement;
     const rect = target.getBoundingClientRect();
     const viewport = doc.documentElement.clientHeight;
-    const fraction = Math.max(0, Math.min(1, (line - anchor.line) / Math.max(1, (anchor.endLine ?? anchor.line) - anchor.line)));
+    const closed = target.tagName === "DETAILS" && !target.hasAttribute("open");
+    const fraction = target !== anchor.element || closed ? 0
+      : Math.max(0, Math.min(1, (line - anchor.line) / Math.max(1, (anchor.endLine ?? anchor.line) - anchor.line)));
     const y = rect.top + Math.max(0, rect.height - 1) * fraction;
     if (y >= 0 && y <= viewport) return;
     this.writeScroll(scroller.scrollTop + y - viewport * 0.28);
@@ -447,6 +452,7 @@ export class PreviewSurface {
         frame.title = tr("Markdown 正文预览");
         doc.documentElement.lang = getLanguage();
         doc.documentElement.dir = languagePacks[getLanguage()].direction;
+        localizeDocumentProperties(doc.documentElement);
         doc.querySelectorAll(".md-code__nav").forEach(element => localizeUi(element));
         doc.querySelectorAll<HTMLElement>(".znote-code-annotation").forEach(button =>
           button.setAttribute("aria-label", tr("代码注释 {0}", [button.dataset.annotationIndex])));
@@ -474,14 +480,15 @@ export class PreviewSurface {
       style("@page{margin:16mm;}@media print{html,body{min-height:0!important;overflow:visible!important;}body{padding:0!important;background:#fff!important;}article{max-width:none!important;}.md-typeset__scrollwrap,.md-typeset__table,pre{max-height:none!important;overflow:visible!important;}img,svg{max-width:100%;}pre,blockquote,img,svg{break-inside:avoid;}}");
       this.syncTheme = () => {
         const appStyle = getComputedStyle(document.documentElement);
-        const font = appStyle.getPropertyValue("--editor-font") || "17px";
-        doc.documentElement.style.setProperty("--editor-font", font);
+        const font = appStyle.getPropertyValue("--reader-font") || "17px";
+        doc.documentElement.style.setProperty("--reader-font", font);
         for (const token of ["paper", "scrollbar", "scrollbar-hover"])
           doc.documentElement.style.setProperty(`--${token}`, appStyle.getPropertyValue(`--${token}`));
-        doc.documentElement.style.colorScheme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+        const dark = !this.options.print && document.documentElement.dataset.theme === "dark";
+        doc.documentElement.style.colorScheme = dark ? "dark" : "light";
         doc.documentElement.style.fontSize = `${parseFloat(font) / (this.currentResult?.theme?.variant === "classic" ? 0.8 : 0.75)}px`;
         doc.body.dataset.mdColorScheme =
-          document.documentElement.dataset.theme === "dark"
+          dark
             ? "slate"
             : "default";
         doc.body.dataset.znReader =
@@ -489,6 +496,7 @@ export class PreviewSurface {
         this.readerStyle!.textContent = readerThemeCss(
           this.currentResult ?? {},
           appStyle,
+          this.options.print,
         );
       };
       this.syncTheme();
@@ -598,7 +606,8 @@ export class PreviewSurface {
   ) {
     if (this.frame && this.frame.parentElement !== host) this.dispose();
     this.cancel();
-    if (context && context.documentId !== this.documentId) {
+    const documentChanged = !!context && context.documentId !== this.documentId;
+    if (context && documentChanged) {
       this.documentId = context.documentId;
       this.editorIntent();
       if (this.cursorFrame) cancelAnimationFrame(this.cursorFrame);
@@ -632,9 +641,11 @@ export class PreviewSurface {
         value.plan?.runtimes,
       ]);
     if (
+      !documentChanged &&
       result.plan?.revisions &&
       this.currentResult?.plan?.revisions &&
       result.html === this.currentResult.html &&
+      JSON.stringify(result.meta) === JSON.stringify(this.currentResult.meta) &&
       path === this.currentPath &&
       result.plan.revisions.parse === this.currentResult.plan.revisions.parse &&
       result.plan.revisions.runtime ===
@@ -681,6 +692,7 @@ export class PreviewSurface {
       session.signal,
       {
         renderAll: context?.renderAll,
+        resetProperties: documentChanged,
         beforeCommit: () => {
           // Theme, styles and body commit together; a cancelled render cannot leak them.
           if (this.intent === "preview") this.rememberReadingPosition();

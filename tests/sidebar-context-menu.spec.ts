@@ -17,6 +17,11 @@ async function desktop(page: Page, language = "zh-CN", startup = false) {
       invoke: async (command: string, args: any) => {
         app.calls.push({ command, args });
         if (["restore_workspace", "refresh_workspace", "choose_workspace"].includes(command)) return structuredClone(workspace);
+        if (command === "list_directory" || command === "document_directory") {
+          const path = args.path ?? args.document.slice(0, args.document.lastIndexOf("\\"));
+          const find = (entries: any[]): any => { for (const entry of entries) { if (entry.path === path) return entry; const nested = find(entry.children); if (nested) return nested; } };
+          return structuredClone(path === root ? workspace : { root: path, name: path.split("\\").pop(), truncated: false, entries: find(workspace.entries)?.children ?? [] });
+        }
         if (command === "read_recovery") return [];
         if (command === "pending_open_requests") { if (app.startupTaken || !startup) return []; app.startupTaken = true; return [{ id: 0, source: "internal", initial: true }]; }
         if (command === "complete_open_request") return { documents: [docs[note]], errors: [] };

@@ -124,6 +124,29 @@ test("a newer selection replaces a pending large format scan", async ({
   );
 });
 
+test("large-note typing avoids full reads and deferred sidebar/recovery use the latest text", async ({ page }) => {
+  const source = '---\ntitle: unfinished\n\n' + 'Paragraph\n\n'.repeat(3000) + '# Latest';
+  await page.locator('button[data-side="outline"]').click();
+  await page.evaluate(async text => {
+    (await import('/tests/editor-insertion-fixture.ts')).updateEditor(text, text.length);
+  }, source);
+  const result = await page.evaluate(async () =>
+    (await import('/tests/editor-optimization-fixture.ts')).measureTypingBurst());
+  expect(result).toEqual({ fullReads: 0, end: source.length + 12 });
+  await expect(page.locator('.outline-item')).toContainText('Latest' + 'x'.repeat(12));
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('znote:drafts') || '[]').at(-1)?.text))
+    .toBe(source + 'x'.repeat(12));
+  await page.locator('button[data-side="search"]').click();
+  await page.locator('#document-search').fill('Latest');
+  await expect(page.locator('.search-result')).toContainText('Latest' + 'x'.repeat(12));
+  await page.evaluate(async () => {
+    (await import('/tests/editor-insertion-fixture.ts')).updateEditor('# Obsolete result', 0);
+  });
+  // Switching documents before the debounce fires must discard old results.
+  await page.locator('.sidebar-add').click();
+  await expect(page.locator('.search-result')).toHaveCount(0);
+});
+
 test("large selection format state eventually completes and word counts catch up", async ({
   page,
 }) => {

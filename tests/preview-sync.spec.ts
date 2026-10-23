@@ -44,19 +44,49 @@ test("mapping refresh keeps unchanged nodes when source offsets and local IDs ch
   await expect(page.frameLocator("iframe").locator("[data-zn-node]")).toHaveCount(0);
 });
 
-test("same HTML with a different frontmatter length refreshes cached source ranges", async ({ page }) => {
-  const source = "# Header";
-  const initial = result('<h1 data-zn-node="0">Header</h1>', [{ id: "0", kind: "h1", precision: "exact", from: 0, to: 8 }]);
-  initial.plan = (Object.values(fixtures.results)[0] as unknown as RenderResult).plan;
+test("front matter and nested callouts refresh ranges while preserving unchanged DOM", async ({ page }) => {
+  const source: string = fixtures.samples.sync_callouts;
+  const initial: RenderResult = fixtures.results.sync_callouts;
   await page.evaluate(async ({ source, initial }) => {
     await (window as any).renderResult(initial, source);
     (window as any).retainedHeading = document.querySelector("iframe")!.contentDocument!.querySelector("h1");
   }, { source, initial });
-  const prefix = "---\ntitle: test\n---\n";
-  const next = { ...initial, sourceMap: { ...initial.sourceMap!, entries: [{ ...initial.sourceMap!.entries[0], from: prefix.length, to: prefix.length + 8 }] } };
-  await page.evaluate(async ({ source, next }) => (window as any).renderResult(next, source), { source: prefix + source, next });
+  const updated: string = fixtures.samples.sync_callouts_updated;
+  const metadataEndLine = updated.split("\n").findIndex((text, i) => i > 0 && text === "---") + 1;
+  await page.evaluate(async ({ source, next }) => (window as any).renderResult(next, source),
+    { source: updated, next: fixtures.results.sync_callouts_updated });
   expect(await page.evaluate(() => document.querySelector("iframe")!.contentDocument!.querySelector("h1") === (window as any).retainedHeading)).toBe(true);
-  expect(await page.evaluate(source => (window as any).getPreviewTarget(source, 4), prefix + source)).toMatchObject({ line: 4, text: "Header" });
+  expect(await page.evaluate(source => (window as any).getPreviewTarget(source, 3), updated))
+    .toMatchObject({ line: 1, endLine: metadataEndLine });
+  const lines = updated.split("\n").flatMap((text, i) => text.includes("重复段落。") ? [i + 1] : []);
+  expect(lines).toHaveLength(3);
+  for (const line of lines) {
+    expect(await page.evaluate(({ source, line }) => (window as any).getPreviewTarget(source, line),
+      { source: updated, line })).toMatchObject({ text: "重复段落。", line, endLine: line });
+  }
+  const frame = page.frameLocator("iframe");
+  const properties = frame.locator(".znote-document-properties > details");
+  await properties.locator(":scope > summary").click();
+  await page.evaluate(source => (window as any).enableScrollSync(source), updated);
+  await properties.evaluate(element => {
+    document.dispatchEvent(new WheelEvent("wheel", { deltaY: 1 }));
+    window.scrollTo(0, window.scrollY + element.getBoundingClientRect().top
+      + element.getBoundingClientRect().height * .5 - document.documentElement.clientHeight * .28);
+  });
+  await expect.poll(() => page.evaluate(() => (window as any).scrollLines.at(-1))).toBeGreaterThan(1);
+  expect(await page.evaluate(() => (window as any).scrollLines.at(-1))).toBeLessThanOrEqual(metadataEndLine);
+  const hiddenLine = updated.split("\n").findIndex(text => text === "> 收起的正文。") + 1;
+  await page.evaluate(({ source, line }) => (window as any).scrollPreview(source, line), { source: updated, line: hiddenLine });
+  await expect(frame.locator("details.warning > summary")).toBeInViewport();
+  await expect(frame.locator("details.warning > p")).toBeHidden();
+});
+
+test("front matter fallback never matches body text to metadata values", async ({ page }) => {
+  const source = '---\nlabel: |\n  Repeated\n---\n\nRepeated';
+  await page.evaluate(async ({ source, rendered }) => (window as any).renderResult(rendered, source),
+    { source, rendered: { ...result('<p>Repeated</p>'), meta: { label: "Repeated" } } });
+  expect(await page.evaluate(source => (window as any).getPreviewTarget(source, 6), source))
+    .toMatchObject({ text: "Repeated", line: 6, endLine: 6 });
 });
 
 test("long mapped blocks use an internal point and do not repeatedly jump to their top", async ({ page }) => {
@@ -228,16 +258,24 @@ test("generated blocks preserve reading position without reporting unrelated sou
 });
 
 test("a closed details block maps its visible summary to the opening source line", async ({ page }) => {
-  const source = "??? note\n\n" + "    hidden content\n".repeat(80);
-  const rendered = result('<details data-zn-node="0"><summary>Note</summary><p data-zn-node="1">hidden content</p></details>' + '<p>footer</p>'.repeat(100), [
-    { id: "0", kind: "details", precision: "exact", from: 0, to: source.length },
-    { id: "1", kind: "p", precision: "exact", from: 10, to: source.length, parentId: "0" },
+  const prefix = "header\n\n".repeat(40);
+  const source = prefix + "??? note\n\n" + "    hidden content\n".repeat(80);
+  const rendered = result('<p>header</p>'.repeat(40) + '<details data-zn-node="0"><summary>Note</summary><p data-zn-node="1">hidden content</p></details>' + '<p>footer</p>'.repeat(100), [
+    { id: "0", kind: "details", precision: "exact", from: prefix.length, to: source.length },
+    { id: "1", kind: "p", precision: "exact", from: prefix.length + 10, to: source.length, parentId: "0" },
   ]);
   await page.evaluate(async ({ rendered, source }) => {
     await (window as any).renderResult(rendered, source);
     (window as any).enableScrollSync(source);
+    (window as any).scrollPreview(source, 81);
   }, { rendered, source });
+  await expect(page.frameLocator("iframe").locator("summary")).toBeInViewport();
   await page.frameLocator("iframe").locator("body").hover();
   await page.mouse.wheel(0, 200);
-  await expect.poll(() => page.evaluate(() => (window as any).scrollLines.at(-1))).toBe(1);
+  await expect.poll(() => page.evaluate(() => (window as any).scrollLines.at(-1))).toBe(81);
+  await page.evaluate(source => (window as any).scrollPreview(source, 150), source);
+  await expect.poll(() => page.frameLocator("iframe").locator("summary").evaluate(element =>
+    Math.abs(element.getBoundingClientRect().top - document.documentElement.clientHeight * .28)))
+    .toBeLessThan(3);
+  await expect(page.frameLocator("iframe").locator("details > p")).toBeHidden();
 });

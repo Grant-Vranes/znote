@@ -6,9 +6,9 @@
 
 1. 在 `src/locales/` 创建资源模块，例如 `de.ts`，导出消息字典。
 2. 在 `src/i18n.ts` 导入模块，并在 `languagePacks` 注册语言标识、原生语言名、方向（`ltr` 或 `rtl`）与 `messages`。语言选项自动从该注册表生成。
-3. 运行 `npm test`、`npm run build` 及 `npx playwright test tests/language.spec.ts`，检查文案与布局。
+3. 运行 `pnpm run check`、`pnpm run build` 及 `pnpm exec playwright test tests/language.spec.ts`，检查文案与布局；`pnpm test` 运行完整浏览器回归。
 
-消息标识采用 gettext 风格的中文源文案。不要为了翻译而修改消息标识。完整资源可以使用 `satisfies Messages`（类型来自 `src/locales/zh-CN.ts`）校验；新增语言也可以提供部分翻译，缺失条目自动使用中文默认文案。英文资源要求完整，单元测试会检查条目和占位符一致性。
+消息标识采用 gettext 风格的中文源文案。不要为了翻译而修改消息标识。完整资源可以使用 `satisfies Messages`（类型来自 `src/locales/zh-CN.ts`）校验；新增语言也可以提供部分翻译，缺失条目自动使用中文默认文案。英文资源要求完整，更新翻译时需保持条目和占位符一致。
 
 ```ts
 import type { Messages } from "./zh-CN";

@@ -17,6 +17,9 @@ async function desktopClipboard(page: Page, text: string, unavailable = false) {
       transformCallback: () => 1,
       unregisterCallback: () => {},
       invoke: async (command: string) => {
+        if (command === "plugin:clipboard-manager|read_image") {
+          throw new Error("Clipboard does not contain an image");
+        }
         if (command === "plugin:clipboard-manager|read_text") {
           app.clipboardReads++;
           if (unavailable) throw new Error("Clipboard unavailable");

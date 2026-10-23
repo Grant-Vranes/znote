@@ -1,7 +1,25 @@
 import { EditorView } from "@codemirror/view";
+import { Text } from "@codemirror/state";
 import { EditorToolbar } from "../src/editor-toolbar";
 import { initializeIcons } from "../src/ui-icons";
 import { Bold } from "lucide";
+
+export function measureTypingBurst() {
+  const view = EditorView.findFromDOM(document.querySelector<HTMLElement>(".tab-editor:not([hidden]) .cm-editor")!)!;
+  const original = Text.prototype.toString;
+  let fullReads = 0;
+  Text.prototype.toString = function () {
+    if (this.length > 20000) fullReads++;
+    return original.call(this);
+  };
+  try {
+    for (let i = 0; i < 12; i++) {
+      const end = view.state.doc.length;
+      view.dispatch({ changes: { from: end, insert: 'x' }, selection: { anchor: end + 1 } });
+    }
+    return { fullReads, end: view.state.doc.length };
+  } finally { Text.prototype.toString = original; }
+}
 
 export function measureInput() {
   const view = EditorView.findFromDOM(

@@ -1,4 +1,27 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+
+async function dragFirstWords(page: Page) {
+  const box = await page.locator(".tab-editor:not([hidden]) .cm-line").first().evaluate(el => {
+    // Syntax highlighting may split the line across several text nodes.
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const start = walker.nextNode()!;
+    let end = start, remaining = 11;
+    while (remaining > end.textContent!.length) {
+      remaining -= end.textContent!.length;
+      end = walker.nextNode()!;
+    }
+    const range = document.createRange();
+    range.setStart(start, 0);
+    range.setEnd(end, remaining);
+    const rect = range.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  });
+  await page.mouse.move(box.x, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width, box.y + box.height / 2, { steps: 10 });
+  await page.mouse.up();
+  return box;
+}
 
 test("theme button cycles light, dark, and system and follows OS changes", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });
@@ -470,18 +493,7 @@ test("drag selection survives the editor context menu and formats only selected 
   const editor = page.locator(".tab-editor:not([hidden]) .cm-content");
   await editor.click();
   await page.keyboard.type("alpha beta gamma");
-  const line = page.locator(".tab-editor:not([hidden]) .cm-line").first();
-  const box = await line.evaluate(el => {
-    const text = el.firstChild!;
-    const range = document.createRange();
-    range.setStart(text, 0); range.setEnd(text, 11);
-    const rect = range.getBoundingClientRect();
-    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-  });
-  await page.mouse.move(box.x, box.y + box.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width, box.y + box.height / 2, { steps: 10 });
-  await page.mouse.up();
+  const box = await dragFirstWords(page);
   await expect(
     page.locator(".tab-editor:not([hidden]) .cm-selectionBackground"),
   ).not.toHaveCount(0);
@@ -490,7 +502,6 @@ test("drag selection survives the editor context menu and formats only selected 
   });
   await expect(page.getByRole("menu", { name: "编辑菜单" })).toBeVisible();
   await page.getByRole("menuitem", { name: "粗体" }).click();
-  await expect(editor).toContainText("**alpha");
   await expect(editor).toContainText("**alpha beta** gamma");
   await expect(page.getByRole("menu", { name: "编辑菜单" })).toHaveCount(0);
 });
@@ -504,18 +515,7 @@ test("mouse selection shows nearby actions and selected length", async ({
   const editor = page.locator(".tab-editor:not([hidden]) .cm-content");
   await editor.click();
   await page.keyboard.type("alpha beta gamma");
-  const line = page.locator(".tab-editor:not([hidden]) .cm-line").first();
-  const box = await line.evaluate(el => {
-    const text = el.firstChild!;
-    const range = document.createRange();
-    range.setStart(text, 0); range.setEnd(text, 11);
-    const rect = range.getBoundingClientRect();
-    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-  });
-  await page.mouse.move(box.x, box.y + box.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width, box.y + box.height / 2, { steps: 10 });
-  await page.mouse.up();
+  await dragFirstWords(page);
   await expect(page.locator("#selection-toolbar")).toBeVisible();
   await expect(page.locator("#selection-summary")).toContainText("已选");
   await expect(page.locator("#cursor-position")).toContainText("已选");

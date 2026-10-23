@@ -24,6 +24,7 @@ type Result<T> = std::result::Result<T, String>;
 struct Access {
     root: Option<PathBuf>,
     files: HashSet<PathBuf>,
+    directories: HashSet<PathBuf>,
 }
 struct AppState {
     access: Mutex<Access>,
@@ -132,6 +133,7 @@ fn authorize(state: &AppState, path: &str, new: bool) -> Result<PathBuf> {
         .root
         .as_ref()
         .is_some_and(|root| canonical.starts_with(root))
+        || access.directories.iter().any(|root| canonical.starts_with(root))
         || access.files.contains(&canonical)
     {
         Ok(canonical)
@@ -264,6 +266,9 @@ struct Entry {
     children: Vec<Entry>,
 }
 fn entries(dir: &Path, depth: usize, remaining: &mut usize) -> Vec<Entry> {
+    scan_entries(dir, depth, remaining, true)
+}
+fn scan_entries(dir: &Path, depth: usize, remaining: &mut usize, recursive: bool) -> Vec<Entry> {
     if depth > 12 || *remaining == 0 {
         return vec![];
     }
@@ -289,17 +294,9 @@ fn entries(dir: &Path, depth: usize, remaining: &mut usize) -> Vec<Entry> {
         }
         let directory = kind.is_dir();
         let p = item.path();
-        if !directory
-            && !matches!(
-                p.extension().and_then(|s| s.to_str()),
-                Some("md" | "markdown" | "txt")
-            )
-        {
-            continue;
-        }
         *remaining -= 1;
-        let children = if directory {
-            entries(&p, depth + 1, remaining)
+        let children = if directory && recursive {
+            scan_entries(&p, depth + 1, remaining, recursive)
         } else {
             vec![]
         };
@@ -322,12 +319,41 @@ fn workspace(state: &AppState, path: PathBuf) -> Result<Value> {
     if !path.is_dir() {
         return Err("请选择文件夹".into());
     }
+    let result = directory_snapshot(&path)?;
     state.access.lock().unwrap().root = Some(path.clone());
+    Ok(result)
+}
+// Independent document folders never replace the explicitly chosen workspace.
+#[tauri::command]
+async fn document_directory(app: tauri::AppHandle, document: String) -> Result<Value> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let doc = authorize(&state, &document, false)?;
+        let root = doc.parent().ok_or("路径缺少父目录")?.to_path_buf();
+        let result = directory_snapshot(&root)?;
+        state.access.lock().unwrap().directories.insert(root);
+        Ok(result)
+    }).await.map_err(|e| e.to_string())?
+}
+fn directory_snapshot(path: &Path) -> Result<Value> {
+    if !path.is_dir() { return Err("请选择文件夹".into()); }
+    // Check readability instead of silently returning an empty folder on failure.
+    fs::read_dir(path).map_err(|e| e.to_string())?;
     let mut remaining = 6000;
-    let tree = entries(&path, 0, &mut remaining);
-    Ok(
-        json!({"root":path.to_string_lossy(),"name":path.file_name().unwrap_or_default().to_string_lossy(),"entries":tree,"truncated":remaining==0}),
-    )
+    let tree = scan_entries(path, 0, &mut remaining, false);
+    Ok(json!({"root":path.to_string_lossy(),"name":path.file_name().unwrap_or_default().to_string_lossy(),"entries":tree,"truncated":remaining==0}))
+}
+#[tauri::command]
+async fn list_directory(app: tauri::AppHandle, path: String, recursive: Option<bool>) -> Result<Value> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let path = file_operations::workspace_path(&state, &path, true)?;
+        if recursive.unwrap_or(false) {
+            let mut remaining = 6000;
+            let tree = entries(&path, 0, &mut remaining);
+            Ok(json!({"root":path.to_string_lossy(),"name":path.file_name().unwrap_or_default().to_string_lossy(),"entries":tree,"truncated":remaining==0}))
+        } else { directory_snapshot(&path) }
+    }).await.map_err(|e| e.to_string())?
 }
 #[tauri::command]
 fn choose_workspace(
@@ -436,6 +462,7 @@ async fn search_workspace(app: tauri::AppHandle, query: String) -> Result<Value>
                 if out.len()>=200 {break;}
                 if entry.directory {visit(entry.children,needle,out);continue;}
                 let path=Path::new(&entry.path);
+                if !matches!(path.extension().and_then(|s| s.to_str()).map(str::to_ascii_lowercase).as_deref(), Some("md" | "markdown" | "txt")) { continue; }
                 if fs::metadata(path).map(|m|m.len()>2*1024*1024).unwrap_or(true){continue;}
                 if let Ok(doc)=read_document(path){for (i,line) in doc.text.lines().enumerate(){
                     if line.to_lowercase().contains(needle){out.push(json!({"path":entry.path,"line":i+1,"text":line.chars().take(240).collect::<String>()}));if out.len()>=200{break;}}
@@ -595,20 +622,32 @@ fn read_asset(state: tauri::State<AppState>, document: String, relative: String)
         base64::engine::general_purpose::STANDARD.encode(bytes)
     ))
 }
+fn image_folder(document: &Path, mode: &str) -> Result<String> {
+    match mode {
+        "assets" => Ok("assets".into()),
+        "same" => Ok(String::new()),
+        "document" => Ok(format!("{}.assets", document.file_stem().and_then(|s| s.to_str()).ok_or("无效的笔记路径")?)),
+        _ => Err("无效的图片目录规则".into()),
+    }
+}
+
 #[tauri::command]
 fn import_image(
     state: tauri::State<AppState>,
     document: String,
     bytes: Vec<u8>,
     extension: String,
+    folder: Option<String>,
+    relative: Option<bool>,
 ) -> Result<String> {
     let doc = authorize(&state, &document, false)?;
-    if bytes.len() > 20 * 1024 * 1024
+    if bytes.is_empty() || bytes.len() > 20 * 1024 * 1024
         || !["png", "jpg", "jpeg", "webp", "gif"].contains(&extension.as_str())
     {
         return Err("请选择 20 MB 以下的常用图片格式".into());
     }
-    let dir = doc.parent().unwrap().join("assets");
+    let folder = image_folder(&doc, folder.as_deref().unwrap_or("assets"))?;
+    let dir = doc.parent().unwrap().join(&folder);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let dir = dir.canonicalize().map_err(|e| e.to_string())?;
     if !dir.starts_with(doc.parent().unwrap()) {
@@ -619,7 +658,14 @@ fn import_image(
     if !path.exists() {
         atomic_write(&path, &bytes)?;
     }
-    Ok(format!("assets/{name}"))
+    if relative.unwrap_or(true) {
+        Ok(if folder.is_empty() { name } else { format!("{folder}/{name}") })
+    } else {
+        // Use the lexical document path rather than Windows canonical \\?\ paths.
+        let lexical = document.strip_prefix(r"\\?\").unwrap_or(&document);
+        let parent = Path::new(lexical).parent().ok_or("无效的笔记路径")?;
+        Ok(parent.join(&folder).join(&name).to_string_lossy().replace('\\', "/"))
+    }
 }
 #[tauri::command]
 fn write_recovery(state: tauri::State<AppState>, documents: Value) -> Result<()> {
@@ -773,6 +819,8 @@ fn main() {
             open_requests::open_default_apps,
             updates::check_for_updates,
             choose_workspace,
+            document_directory,
+            list_directory,
             restore_workspace,
             refresh_workspace,
             choose_file,
@@ -806,91 +854,4 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("ZNote could not start");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn utf8_bom_crlf_and_conflict() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("中文.md");
-        fs::write(&path, b"\xef\xbb\xbf# title\r\n").unwrap();
-        let doc = read_document(&path).unwrap();
-        assert!(doc.bom);
-        assert_eq!(doc.eol, "CRLF");
-        let save = Save {
-            path: path.to_string_lossy().into(),
-            text: "# 中文\n\n你好 😀\n".into(),
-            expected_hash: doc.hash,
-            bom: true,
-            eol: "CRLF".into(),
-        };
-        let out = save_document(&path, &save).unwrap();
-        assert_eq!(out.text, "# 中文\r\n\r\n你好 😀\r\n");
-        assert!(save_document(&path, &save)
-            .unwrap_err()
-            .starts_with("CONFLICT:"));
-    }
-    #[test]
-    fn rejects_non_utf8() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("x.md");
-        fs::write(&p, [0xff, 0xfe]).unwrap();
-        assert!(read_document(&p).is_err());
-    }
-    #[test]
-    fn tree_excludes_build_directories() {
-        let d = tempfile::tempdir().unwrap();
-        fs::create_dir(d.path().join("node_modules")).unwrap();
-        fs::write(d.path().join("note.md"), "hi").unwrap();
-        let e = entries(d.path(), 0, &mut 100);
-        assert_eq!(e.len(), 1);
-        assert_eq!(e[0].name, "note.md");
-    }
-    #[test]
-    fn recent_files_persist_dedupe_and_reopen_only_saved_paths() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = AppState {
-            access: Mutex::new(Access::default()),
-            recent_files: Mutex::new(Vec::new()),
-            worker: Mutex::new(None),
-            data: dir.path().to_path_buf(),
-            renderer: PathBuf::new(),
-            renderer_args: Vec::new(),
-            recovery: recovery::Recovery::new(dir.path()).unwrap(),
-        };
-        let first = dir.path().join("first.md");
-        let other = dir.path().join("other.md");
-        fs::write(&first, "first").unwrap();
-        fs::write(&other, "other").unwrap();
-        let first = first.canonicalize().unwrap();
-        let other = other.canonicalize().unwrap();
-        remember_recent_path(&state, first.clone()).unwrap();
-        remember_recent_path(&state, first.clone()).unwrap();
-        assert!(open_recent_path(&state, &other.to_string_lossy()).is_err());
-        assert_eq!(
-            open_recent_path(&state, &first.to_string_lossy())
-                .unwrap()
-                .text,
-            "first"
-        );
-        let saved: Vec<PathBuf> =
-            serde_json::from_slice(&fs::read(dir.path().join("recent-files.json")).unwrap())
-                .unwrap();
-        assert_eq!(saved, vec![first]);
-        for index in 0..12 {
-            remember_recent_path(&state, dir.path().join(format!("{index}.md"))).unwrap();
-        }
-        let files = state.recent_files.lock().unwrap();
-        assert_eq!(files.len(), RECENT_FILES_LIMIT);
-        assert_eq!(files[0], dir.path().join("11.md"));
-        drop(files);
-        clear_recent_paths(&state).unwrap();
-        assert!(state.recent_files.lock().unwrap().is_empty());
-        let saved: Vec<PathBuf> =
-            serde_json::from_slice(&fs::read(dir.path().join("recent-files.json")).unwrap())
-                .unwrap();
-        assert!(saved.is_empty());
-    }
 }

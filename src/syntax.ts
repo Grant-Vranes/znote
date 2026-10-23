@@ -1,3 +1,4 @@
+import { frontMatterRange } from "./front-matter";
 export interface Heading { from: number; level: number; text: string }
 
 /** Outline positions are UTF-16 offsets, matching CodeMirror's document. */
@@ -6,12 +7,10 @@ export function headings(text: string): Heading[] {
   const lines = text.split("\n");
   let offset = 0;
   let fence: { marker: string; size: number } | undefined;
-  let frontMatter = lines[0]?.trim() === "---" &&
-    lines.slice(1).some(line => /^(?:---|\.\.\.)\s*$/.test(line));
+  const metadataEnd = frontMatterRange(text)?.to ?? 0;
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
-    if (frontMatter) {
-      if (index > 0 && /^(?:---|\.\.\.)\s*$/.test(line)) frontMatter = false;
+    if (offset < metadataEnd) {
       offset += line.length + 1; continue;
     }
     const matchFence = line.match(/^ {0,3}(`{3,}|~{3,})/);

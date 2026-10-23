@@ -6,6 +6,7 @@ import {
 import { ensureSyntaxTree, syntaxTree, language } from "@codemirror/language";
 import { isolateHistory } from "@codemirror/commands";
 import type { EditorView } from "@codemirror/view";
+import { editorFrontMatter } from "./editor-front-matter";
 type SyntaxNode = ReturnType<typeof syntaxTree>["topNode"];
 
 export type InlineStyle = "bold" | "italic" | "inline-code" | "strikethrough";
@@ -134,22 +135,13 @@ function listType(marker: string): "list" | "ordered" | "task" | null {
         ? "list"
         : null;
 }
-const frontMatterEnds = new WeakMap<EditorState["doc"], number>();
 function frontMatterEnd(state: EditorState) {
-  const cached = frontMatterEnds.get(state.doc);
-  if (cached !== undefined) return cached;
-  let end = 0;
-  if (state.doc.line(1).text.trim() === "---") {
-    for (let n = 2; n <= state.doc.lines; n++) {
-      const line = state.doc.line(n);
-      if (/^(---|\.\.\.)\s*$/.test(line.text)) {
-        end = line.to;
-        break;
-      }
-    }
-  }
-  frontMatterEnds.set(state.doc, end);
-  return end;
+  return editorFrontMatter(state)?.to ?? 0;
+}
+export function selectionInFrontMatter(state: EditorState) {
+  const end = frontMatterEnd(state);
+  return end > 0 && state.selection.ranges.some(range =>
+    range.empty ? range.from <= end : range.from < end);
 }
 function lineContext(state: EditorState, pos: number, parsed = tree(state)) {
   const line = state.doc.lineAt(pos),
@@ -186,6 +178,7 @@ function lineContext(state: EditorState, pos: number, parsed = tree(state)) {
   };
 }
 export interface FormattingState {
+  frontMatter?: boolean;
   block: string;
   list: "list" | "ordered" | "task" | "mixed" | null;
   quote: boolean;
@@ -206,6 +199,12 @@ export function* formattingSteps(
 ): Generator<void, FormattingState> {
   const cached = formatCache.get(state);
   if (cached?.tree === parsed) return cached.value;
+  if (selectionInFrontMatter(state)) {
+    const value: FormattingState = { frontMatter: true, block: "paragraph", list: null,
+      quote: false, bold: false, italic: false, code: false, strikethrough: false };
+    formatCache.set(state, { tree: parsed, value });
+    return value;
+  }
   const { from, to, empty } = state.selection.main;
   const first = state.doc.lineAt(from).number;
   const last = state.doc.lineAt(
@@ -353,6 +352,7 @@ export function inlineStyleTransaction(
   state: EditorState,
   style: InlineStyle,
 ): TransactionSpec | null {
+  if (selectionInFrontMatter(state)) return null;
   const range = state.selection.main,
     node = inlineNode(state, style);
   let mark = markers[style];
@@ -590,6 +590,7 @@ export function blockStyleTransaction(
   state: EditorState,
   style: BlockStyle,
 ): TransactionSpec | null {
+  if (selectionInFrontMatter(state)) return null;
   const parsed = tree(state);
   let lines = selectedLines(state);
   const isList = ["list", "ordered", "task"].includes(style);
@@ -710,6 +711,7 @@ export function insertBlockTransaction(
   state: EditorState,
   text: string,
 ): TransactionSpec | null {
+  if (selectionInFrontMatter(state)) return null;
   const { from, to } = state.selection.main,
     sourceLine = state.doc.lineAt(from),
     line = splitLine(sourceLine.text);

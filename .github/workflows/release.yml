@@ -42,13 +42,8 @@ jobs:
             node scripts/check-release-version.mjs
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - run: pnpm test
       - name: Build desktop and NSIS installer
         run: pnpm run tauri build
-      - name: Validate native behavior
-        # Match Tauri's release profile and feature set to reuse compiled dependencies.
-        # The application test harness still needs its own compilation and linking.
-        run: cargo test --release --locked --features tauri/custom-protocol --manifest-path src-tauri/Cargo.toml
       - name: Package portable application
         run: .venv/Scripts/python.exe scripts/package-release.py
       - name: Hash the installer

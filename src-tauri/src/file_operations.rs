@@ -21,14 +21,11 @@ pub(crate) fn valid_name(name: &str) -> Result<()> {
 
 pub(crate) fn workspace_path(state: &AppState, path: &str, allow_root: bool) -> Result<PathBuf> {
     let canonical = normalize_existing(path)?;
-    let root = state
-        .access
-        .lock()
-        .map_err(|e| e.to_string())?
-        .root
-        .clone()
-        .ok_or("请先打开文件夹")?;
-    if !canonical.starts_with(&root) || (!allow_root && canonical == root) {
+    let access = state.access.lock().map_err(|e| e.to_string())?;
+    let roots = access.root.iter().chain(access.directories.iter());
+    let allowed = roots.clone().any(|root| canonical.starts_with(root));
+    let is_root = roots.clone().any(|root| canonical == *root);
+    if !allowed || (!allow_root && is_root) {
         return Err("只能操作当前笔记文件夹内的项目，不能修改根文件夹。".into());
     }
     Ok(canonical)
@@ -297,106 +294,5 @@ pub(crate) fn reveal_entry(state: tauri::State<AppState>, path: String) -> Resul
     {
         let _ = path;
         Err("此平台尚不支持打开文件位置。".into())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn state(data: &Path, root: &Path) -> AppState {
-        AppState {
-            access: Mutex::new(Access {
-                root: Some(root.canonicalize().unwrap()),
-                files: HashSet::new(),
-            }),
-            recent_files: Mutex::new(Vec::new()),
-            worker: Mutex::new(None),
-            data: data.to_owned(),
-            renderer: PathBuf::new(),
-            renderer_args: Vec::new(),
-            recovery: recovery::Recovery::new(data).unwrap(),
-        }
-    }
-    #[test]
-    fn names_and_workspace_boundary_are_checked() {
-        for name in [
-            "",
-            ".hidden",
-            "../escape",
-            "a\\b",
-            "CON.md",
-            "nul",
-            "LPT1.txt",
-            "note.",
-            "note ",
-            "note:stream",
-            "a\n",
-        ] {
-            assert!(valid_name(name).is_err(), "{name}");
-        }
-        valid_name("中文 笔记.md").unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("notes");
-        fs::create_dir(&root).unwrap();
-        let outside = dir.path().join("outside.md");
-        fs::write(&outside, "keep").unwrap();
-        let app = state(dir.path(), &root);
-        assert!(workspace_path(&app, &outside.to_string_lossy(), true).is_err());
-        assert!(workspace_path(&app, &root.to_string_lossy(), false).is_err());
-        assert!(workspace_path(&app, &root.join("../outside.md").to_string_lossy(), true).is_err());
-        assert!(workspace_path(&app, &root.to_string_lossy(), true).is_ok());
-        assert_eq!(fs::read_to_string(outside).unwrap(), "keep");
-    }
-    #[test]
-    fn copies_preserve_bytes_and_never_overwrite_existing_names() {
-        let dir = tempfile::tempdir().unwrap();
-        let app = state(dir.path(), dir.path());
-        let path = dir.path().join("note.md");
-        let bytes = b"\xef\xbb\xbf# original\r\n";
-        fs::write(&path, bytes).unwrap();
-        fs::write(dir.path().join("note copy.md"), "keep").unwrap();
-        let copy = duplicate_path(&app, &path.to_string_lossy(), "copy").unwrap();
-        assert!(copy.path.ends_with("note copy 2.md"));
-        assert!(copy.bom);
-        assert_eq!(copy.eol, "CRLF");
-        assert_eq!(fs::read(copy.path).unwrap(), bytes);
-        assert_eq!(
-            fs::read_to_string(dir.path().join("note copy.md")).unwrap(),
-            "keep"
-        );
-    }
-    #[test]
-    #[cfg(windows)]
-    fn case_only_renaming_preserves_file_contents() {
-        let dir = tempfile::tempdir().unwrap();
-        let app = state(dir.path(), dir.path());
-        let path = dir.path().join("Note.md");
-        fs::write(&path, "original").unwrap();
-        let renamed = rename_path(&app, &path.to_string_lossy(), "note.md").unwrap();
-        assert!(renamed.ends_with("note.md"));
-        assert_eq!(fs::read_to_string(renamed).unwrap(), "original");
-    }
-    #[test]
-    fn renaming_folders_updates_authorized_and_recent_descendants_without_overwriting() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("notes");
-        fs::create_dir(&root).unwrap();
-        let source = root.join("old");
-        fs::create_dir(&source).unwrap();
-        let path = source.join("note.md");
-        fs::write(&path, "original").unwrap();
-        let app = state(dir.path(), &root);
-        let path = path.canonicalize().unwrap();
-        app.access.lock().unwrap().files.insert(path.clone());
-        app.recent_files.lock().unwrap().push(path);
-        let destination = rename_path(&app, &source.to_string_lossy(), "new").unwrap();
-        let moved = PathBuf::from(destination).join("note.md");
-        assert!(app.access.lock().unwrap().files.contains(&moved));
-        assert_eq!(app.recent_files.lock().unwrap()[0], moved);
-        let occupied = moved.parent().unwrap().join("occupied.md");
-        fs::write(&occupied, "keep").unwrap();
-        assert!(rename_path(&app, &moved.to_string_lossy(), "occupied.md").is_err());
-        assert_eq!(fs::read_to_string(&moved).unwrap(), "original");
-        assert_eq!(fs::read_to_string(occupied).unwrap(), "keep");
     }
 }

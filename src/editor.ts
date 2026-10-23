@@ -1,12 +1,14 @@
+import { isImageFile } from "./image-settings";
 import { tr, onLanguageChange } from "./i18n";
-import { EditorState, Compartment } from "@codemirror/state";
+import { EditorState, Compartment, type Text } from "@codemirror/state";
 import { EditorView, keymap, drawSelection, dropCursor, highlightActiveLine, placeholder } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab, toggleComment } from "@codemirror/commands";
-import { markdown, markdownLanguage, markdownKeymap } from "@codemirror/lang-markdown";
-import { syntaxHighlighting, bracketMatching, indentOnInput, syntaxTree } from "@codemirror/language";
+import { markdownKeymap } from "@codemirror/lang-markdown";
+import { noteLanguage } from "./editor-language";
+import { bracketMatching, indentOnInput, syntaxTree } from "@codemirror/language";
 import { searchKeymap, highlightSelectionMatches, closeSearchPanel, openSearchPanel } from "@codemirror/search";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
-import { editorHighlightStyle } from "./editor-theme";
+import { editorSyntaxHighlighting } from "./editor-theme";
 import { editorCommands } from "./editor-command-registry";
 import { applyEditorTransaction, blockStyleTransaction, inlineStyleTransaction, type InlineStyle, type BlockStyle } from "./editor-commands";
 
@@ -14,10 +16,11 @@ const lightTheme = EditorView.theme({}, { dark: false });
 const darkTheme = EditorView.theme({}, { dark: true });
 
 export interface EditorCallbacks {
-  change: (text: string) => void;
+  change: (doc: Text) => void;
   cursor: () => void;
   save: () => void;
   image: (file: File) => void;
+  images?: (files: File[]) => void;
   command?: (action: string) => void;
   formatting?: () => void;
 }
@@ -39,7 +42,7 @@ export class NoteEditor {
       EditorView.contentAttributes.of({"aria-label": tr("Markdown 编辑器"), spellcheck: "false", autocapitalize: "off"}),
     ];
   }
-  constructor(parent: HTMLElement, text: string, callbacks: EditorCallbacks) {
+  constructor(parent: HTMLElement, text: string | Text, callbacks: EditorCallbacks) {
     const shortcuts = [
       ...editorCommands.filter(command => command.key).map(command => ({key: command.key!, run: (view: EditorView) => {
         if (callbacks.command) { callbacks.command(command.id); return true; }
@@ -55,21 +58,36 @@ export class NoteEditor {
         extensions: [
           this.locale.of(this.localeExtensions()),
           this.appearance.of(parent.ownerDocument.documentElement.dataset.theme === "dark" ? darkTheme : lightTheme),
-          markdown({ base: markdownLanguage }), history(), drawSelection(), dropCursor(), indentOnInput(),
+          noteLanguage, history(), drawSelection(), dropCursor(), indentOnInput(),
           bracketMatching(), closeBrackets(), highlightSelectionMatches(), highlightActiveLine(),
-          syntaxHighlighting(editorHighlightStyle),
+          editorSyntaxHighlighting,
           EditorView.lineWrapping,
           keymap.of([...shortcuts, ...markdownKeymap, ...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
           EditorView.updateListener.of((update) => {
-            if (update.docChanged) callbacks.change(update.state.doc.toString());
+            if (update.docChanged) callbacks.change(update.state.doc);
             if (update.selectionSet || update.docChanged) callbacks.cursor();
             else if (syntaxTree(update.startState) !== syntaxTree(update.state)) callbacks.formatting?.();
           }),
-          EditorView.domEventHandlers({paste: (event) => {
-            const image = Array.from(event.clipboardData?.files || []).find(file => file.type.startsWith("image/"));
-            if (!image) return false;
-            event.preventDefault(); callbacks.image(image); return true;
-          }}),
+          EditorView.domEventHandlers({
+            paste: event => {
+              const files = Array.from(event.clipboardData?.files || []).filter(isImageFile);
+              if (!files.length) return false;
+              event.preventDefault();
+              if (callbacks.images) callbacks.images(files);
+              else files.forEach(callbacks.image);
+              return true;
+            },
+            drop: (event, view) => {
+              const files = Array.from(event.dataTransfer?.files || []).filter(isImageFile);
+              if (!files.length) return false;
+              event.preventDefault();
+              const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+              if (pos !== null) view.dispatch({ selection: { anchor: pos } });
+              if (callbacks.images) callbacks.images(files);
+              else files.forEach(callbacks.image);
+              return true;
+            },
+          }),
         ],
       }),
     });
