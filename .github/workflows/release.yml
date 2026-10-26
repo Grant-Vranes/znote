@@ -1,4 +1,4 @@
-name: Windows release
+name: Release
 
 on:
   push:
@@ -95,3 +95,102 @@ jobs:
           $artifacts = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe, src-tauri/target/release/bundle/nsis/*.sha256, release/*.zip, release/*.sha256 | ForEach-Object { $_.FullName })
           gh release upload $env:GITHUB_REF_NAME @artifacts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: pnpm install --frozen-lockfile
+      - run: python -m pip install uv
+      - name: Validate version and release tag
+        run: |
+          if [ "$GITHUB_REF_TYPE" = 'tag' ]; then
+            node scripts/check-release-version.mjs "$GITHUB_REF_NAME"
+          else
+            node scripts/check-release-version.mjs
+          fi
+      - name: Build desktop app and DMG
+        run: pnpm run tauri build
+      - name: Upload app bundle and DMG
+        id: artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ZNote-macos
+          path: |
+            src-tauri/target/release/bundle/macos/*.app
+            src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+      - name: Show download location
+        env:
+          ARTIFACT_URL: ${{ steps.artifacts.outputs.artifact-url }}
+        run: |
+          echo '## macOS 构建产物' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo "[下载 ZNote-macos]($ARTIFACT_URL)（需要登录 GitHub）" >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '未签名的应用首次打开需右键选择“打开”绕过 Gatekeeper。' >> "$GITHUB_STEP_SUMMARY"
+
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
+      - run: pnpm install --frozen-lockfile
+      - run: python -m pip install uv
+      - name: Validate version and release tag
+        run: |
+          if [ "$GITHUB_REF_TYPE" = 'tag' ]; then
+            node scripts/check-release-version.mjs "$GITHUB_REF_NAME"
+          else
+            node scripts/check-release-version.mjs
+          fi
+      - name: Build Linux packages
+        run: pnpm run tauri build
+      - name: Upload Linux packages
+        id: artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ZNote-linux-x64
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+            src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+      - name: Show download location
+        env:
+          ARTIFACT_URL: ${{ steps.artifacts.outputs.artifact-url }}
+        run: |
+          echo '## Linux 构建产物' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo "[下载 ZNote-linux-x64]($ARTIFACT_URL)（需要登录 GitHub）" >> "$GITHUB_STEP_SUMMARY"

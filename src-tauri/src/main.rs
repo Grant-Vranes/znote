@@ -780,24 +780,29 @@ fn main() {
                 .ok()
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                 .unwrap_or_default();
-            let bundled = app
-                .path()
-                .resource_dir()?
-                .join("bin/znote-renderer/znote-renderer.exe");
+            let (bundled, bundled_args) = {
+                let renderer = if cfg!(windows) {
+                    "bin/znote-renderer/znote-renderer.exe"
+                } else {
+                    "bin/znote-renderer/znote-renderer"
+                };
+                (app.path().resource_dir()?.join(renderer), Vec::new())
+            };
             let (renderer, renderer_args) = if cfg!(dev) {
                 let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-                let python = root.join(".venv/Scripts/python.exe");
+                let python = if cfg!(windows) {
+                    root.join(".venv/Scripts/python.exe")
+                } else {
+                    root.join(".venv/bin/python")
+                };
                 let script = root.join("python/znote_renderer.py");
                 if python.is_file() && script.is_file() {
                     (python, vec![script])
                 } else {
-                    (
-                        root.join("build/renderer-dist/znote-renderer/znote-renderer.exe"),
-                        vec![],
-                    )
+                    (bundled, bundled_args)
                 }
             } else {
-                (bundled, vec![])
+                (bundled, bundled_args)
             };
             let recovery = recovery::Recovery::new(&data)?;
             app.manage(AppState {

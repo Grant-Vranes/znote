@@ -6,7 +6,8 @@ import sys
 
 sys.stdout.reconfigure(encoding="utf-8")
 root = Path(__file__).resolve().parent.parent
-exe = Path(sys.argv[1]) if len(sys.argv) > 1 else root / "build/renderer-dist/znote-renderer/znote-renderer.exe"
+exe_name = "znote-renderer.exe" if sys.platform == "win32" else "znote-renderer"
+exe = Path(sys.argv[1]) if len(sys.argv) > 1 else root / "build/renderer-dist/znote-renderer" / exe_name
 process = subprocess.Popen([str(exe)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, text=True, encoding="utf-8")
 

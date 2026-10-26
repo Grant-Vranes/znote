@@ -29,27 +29,18 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "nsis"
-    ],
     "icon": [
+      "icons/32x32.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
       "icons/icon.ico"
     ],
     "resources": {
-      "icons/markdown.ico": "icons/markdown.ico",
       "../build/renderer-dist/znote-renderer/": "bin/znote-renderer/"
     },
     "shortDescription": "本地 Markdown 编辑与阅览",
-    "category": "Productivity",
-    "windows": {
-      "nsis": {
-        "installerHooks": "windows/file-associations.nsh",
-        "languages": [
-          "SimpChinese",
-          "English"
-        ],
-        "displayLanguageSelector": true
-      }
-    }
+    "category": "Productivity"
   }
 }

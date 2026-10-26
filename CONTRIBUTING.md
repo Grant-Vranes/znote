@@ -10,21 +10,30 @@
 | --- | --- | --- |
 | Node.js | 20 或更高 | 前端构建与测试 |
 | pnpm | 任意近期版本 | 依赖管理（`pnpm-lock.yaml` 是唯一锁文件） |
-| Rust | 1.77+ MSVC 工具链 | Tauri 桌面外壳 |
-| Python | 3.11 | 内置渲染器（冻结运行时为 `python311.dll`） |
+| Rust | 1.77+（Windows 用 MSVC 工具链） | Tauri 桌面外壳 |
+| Python | 3.11 | 内置渲染器（冻结运行时） |
 | uv | 任意近期版本 | 创建 `.venv`、安装渲染器依赖 |
-| WebView2 Runtime | — | 运行与调试（Windows 11 已内置） |
+| WebView2 Runtime | — | Windows 上运行与调试（Windows 11 已内置） |
+
+Linux 还需 Tauri 系统依赖（以 Ubuntu/Debian 为例）：
+
+```bash
+sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+```
+
+macOS 只需 Xcode Command Line Tools（`xcode-select --install`）。
 
 `pnpm run` 与 `npm run` 都能执行脚本；`.npmrc` 把 pnpm store 固定在项目内的 `.pnpm-store/`。
 
 ## 首次设置
 
-```powershell
+```bash
 # 1. 前端依赖
 pnpm install
 
 # 2. 构建内置渲染器（桌面端必做，见下方说明）
-& .\scripts\build-renderer.ps1
+powershell -File scripts/build-renderer.ps1   # Windows
+bash scripts/build-renderer.sh                # macOS / Linux
 ```
 
 ### 为什么必须先构建渲染器
@@ -42,8 +51,9 @@ ZNote 的 Markdown 渲染不在 JavaScript 里，而是由一个**用 PyInstalle
 - `config/render-capabilities.json` → 运行时 `config/`
 - `.venv/.../zensical/templates/.icons` → 运行时 `zensical/templates/.icons`
 
-> 脚本在 Windows PowerShell 5.1 与 PowerShell 7 下都能运行。它依靠各原生命令的
-> `$LASTEXITCODE` 判断失败，而不是依赖 `$ErrorActionPreference`。
+> Windows 上用 `scripts/build-renderer.ps1`（PowerShell 5.1 与 7 均可，脚本靠各原生命令的
+> `$LASTEXITCODE` 判断失败，不依赖 `$ErrorActionPreference`）；macOS/Linux 上用
+> `scripts/build-renderer.sh`（依赖 `uv`，PyInstaller 数据分隔符在脚本内已按平台处理）。
 
 ## 项目结构
 
@@ -93,7 +103,7 @@ znote/
 
 ## 构建与运行
 
-```powershell
+```bash
 # 桌面开发（需要已构建渲染器）
 pnpm run tauri dev
 
@@ -102,19 +112,26 @@ pnpm run dev            # http://127.0.0.1:1420
 pnpm run build          # tsc --noEmit && vite build
 pnpm run check          # 仅类型检查
 
-# 便携版可执行文件
+# 仅可执行文件，不打安装包
 pnpm run tauri build --no-bundle
 
-# NSIS 安装器
+# 完整打包（按当前系统自动选择目标）
 pnpm run tauri build
 ```
 
-开发版 WebView2 数据保存在项目的 `.znote/webview-dev`，与安装版隔离，避免配置目录争用。
-可用 `WEBVIEW2_USER_DATA_FOLDER` 覆盖；`tauri build` 不使用该开发路径。
+打包目标由平台覆盖文件决定：Windows 产出 NSIS 安装器（`tauri.windows.conf.json`），
+macOS 产出 `.app` 与 `.dmg`（`tauri.macos.conf.json`），Linux 产出 `.deb`、
+`.rpm` 与 `.AppImage`（`tauri.linux.conf.json`）。产物统一位于
+`src-tauri/target/release/bundle/`。`pnpm run tauri build` 会先经
+`scripts/build-desktop.mjs` 自动构建渲染器（Windows 走 ps1，其它平台走 sh），
+再执行类型检查、前端构建与资源校验。
+
+开发版 WebView 数据保存在项目的 `.znote/webview-dev`，与安装版隔离，避免配置目录争用
+（仅 Windows / WebView2）。可用 `WEBVIEW2_USER_DATA_FOLDER` 覆盖；`tauri build` 不使用该开发路径。
 
 ### 同步 Zensical 样式
 
-当 `python/requirements.txt` 里的 Zensical 版本变化时：
+当 `python/requirements.txt` 里的 Zensical 版本变化时（任意平台均可）：
 
 ```powershell
 pnpm run styles:sync

@@ -2,7 +2,8 @@
 
 **把注意力留给内容本身的 Markdown 笔记工具。**
 
-ZNote 是一款本地优先的 Windows 桌面 Markdown 编辑器与阅览器。你的笔记以最朴素的
+ZNote 是一款本地优先的桌面 Markdown 编辑器与阅览器，支持 Windows、macOS 与
+Linux。你的笔记以最朴素的
 `.md` 文件保存在自己的磁盘上，随时可以用任何别的工具打开；ZNote 只负责让你写得舒服、
 读得好看。
 
@@ -72,6 +73,40 @@ ZNote 是一款本地优先的 Windows 桌面 Markdown 编辑器与阅览器。�
 
 - Windows 10 / 11（64 位）
 - WebView2 Runtime —— Windows 11 已内置；Windows 10 通常随 Edge 一起提供
+
+macOS 与 Linux 版本可从源码构建（见下文），也可从 CI 构建产物下载；正式发布渠道
+目前仍以 Windows 为准。
+
+## 从源码运行与构建
+
+需要 Node.js 20+、pnpm、Rust 1.77+、Python 3.11 与 uv（详见
+[CONTRIBUTING.md](CONTRIBUTING.md)）。
+
+```bash
+# 1. 前端依赖
+pnpm install
+
+# 2. 构建内置渲染器（桌面端必做）
+#    Windows: powershell -File scripts/build-renderer.ps1
+#    macOS / Linux: bash scripts/build-renderer.sh
+
+# 3. 桌面开发模式
+pnpm run tauri dev
+
+# 4. 打包发布产物
+pnpm run tauri build
+```
+
+`pnpm run tauri build` 按当前操作系统自动选择打包目标：
+
+| 平台 | 产物 | 位置 |
+| --- | --- | --- |
+| Windows | NSIS 安装器 | `src-tauri/target/release/bundle/nsis/` |
+| macOS | `.app` 与 `.dmg` | `src-tauri/target/release/bundle/{macos,dmg}/` |
+| Linux | `.deb` / `.rpm` / `.AppImage` | `src-tauri/target/release/bundle/{deb,rpm,appimage}/` |
+
+平台差异由 `src-tauri/tauri.{windows,macos,linux}.conf.json` 覆盖文件控制。
+推送到 GitHub 的 `v*` 标签会触发三个平台的 CI 构建，产物在 Actions Artifacts 里。
 
 ## 快速上手
 

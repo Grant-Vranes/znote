@@ -177,6 +177,12 @@ pub(crate) fn duplicate_note(
     duplicate_path(&state, &path, &suffix)
 }
 
+fn dirs_next_home() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
 fn shell_path(path: &Path) -> String {
     let path = path.to_string_lossy();
     if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
@@ -248,8 +254,51 @@ fn recycle(path: &Path) -> Result<()> {
     }
     #[cfg(not(windows))]
     {
-        let _ = path;
-        Err("此平台尚不支持移入回收站。".into())
+        #[cfg(target_os = "macos")]
+        {
+            // macOS has no system-wide trash API in std; move into the user's
+            // Trash with a unique suffix to avoid name collisions.
+            let filename = path
+                .file_name()
+                .map(|name| name.to_owned())
+                .ok_or_else(|| "无法移入回收站：路径无效。".to_string())?;
+            let mut trash = dirs_next_home().join(".Trash");
+            if !trash.is_dir() {
+                return Err("无法移入回收站：找不到废纸篓目录。".into());
+            }
+            trash.push(&filename);
+            let mut candidate = trash.clone();
+            let mut counter = 1u32;
+            while candidate.exists() {
+                let stem = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| filename.to_string_lossy().into_owned());
+                let ext = path
+                    .extension()
+                    .map(|e| format!(".{}", e.to_string_lossy()))
+                    .unwrap_or_default();
+                candidate = trash.with_file_name(format!("{stem} {counter}{ext}"));
+                counter += 1;
+            }
+            fs::rename(path, &candidate).map_err(|e| format!("无法移入回收站：{e}"))?;
+            return Ok(());
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            // freedesktop.org environments ship `gio trash` via GLib (GNOME,
+            // KDE, Cinnamon and friends all provide it).
+            let status = Command::new("gio")
+                .arg("trash")
+                .arg(path)
+                .status()
+                .map_err(|e| format!("无法移入回收站：找不到 gio 命令（{e}）。"))?;
+            if status.success() {
+                Ok(())
+            } else {
+                Err("无法移入回收站，gio 命令执行失败。".into())
+            }
+        }
     }
 }
 
@@ -292,7 +341,11 @@ pub(crate) fn reveal_entry(state: tauri::State<AppState>, path: String) -> Resul
     }
     #[cfg(not(windows))]
     {
-        let _ = path;
-        Err("此平台尚不支持打开文件位置。".into())
+        #[cfg(target_os = "macos")]
+        let program = "open";
+        #[cfg(not(target_os = "macos"))]
+        let program = "xdg-open";
+        Command::new(program).arg(&path).spawn().map_err(|e| e.to_string())?;
+        Ok(())
     }
 }

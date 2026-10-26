@@ -1,0 +1,19 @@
+{
+  "bundle": {
+    "targets": ["nsis"],
+    "resources": {
+      "icons/markdown.ico": "icons/markdown.ico",
+      "../build/renderer-dist/znote-renderer/": "bin/znote-renderer/"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "windows/file-associations.nsh",
+        "languages": [
+          "SimpChinese",
+          "English"
+        ],
+        "displayLanguageSelector": true
+      }
+    }
+  }
+}
