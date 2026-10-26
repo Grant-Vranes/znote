@@ -70,6 +70,18 @@ pub(crate) fn classify_path(path: &Path) -> FileKind {
     }
 }
 
+pub(crate) fn save_as_name(name: &str, kind: FileKind) -> String {
+    if kind == FileKind::Markdown
+        && ![".md", ".markdown", ".mdx"]
+            .iter()
+            .any(|extension| name.to_ascii_lowercase().ends_with(extension))
+    {
+        format!("{name}.md")
+    } else {
+        name.to_owned()
+    }
+}
+
 pub(crate) fn ensure_text_writable(kind: FileKind) -> Result<()> {
     if matches!(kind, FileKind::Pdf | FileKind::Image) {
         Err("媒体文件为只读，不能作为文本保存。".into())
@@ -323,6 +335,20 @@ mod tests {
         assert_eq!(super::decode_uri_path("a+b.css").unwrap(), "a+b.css");
         assert!(super::decode_uri_path("bad%2").is_err());
         assert!(super::decode_uri_path("%FF").is_err());
+    }
+
+    #[test]
+    fn save_as_preserves_code_extensions_and_keeps_markdown_default() {
+        assert_eq!(
+            super::save_as_name("script.py", FileKind::Code),
+            "script.py"
+        );
+        assert_eq!(super::save_as_name("Makefile", FileKind::Code), "Makefile");
+        assert_eq!(super::save_as_name("draft", FileKind::Markdown), "draft.md");
+        assert_eq!(
+            super::save_as_name("notes.markdown", FileKind::Markdown),
+            "notes.markdown"
+        );
     }
 
     #[test]

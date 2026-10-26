@@ -530,10 +530,26 @@ fn save_file(state: tauri::State<AppState>, data: Save) -> Result<Document> {
     save_document(&path, &data)
 }
 #[tauri::command]
-fn save_as(state: tauri::State<AppState>, text: String, name: String) -> Result<Option<Document>> {
-    let mut dialog = rfd::FileDialog::new()
-        .add_filter("Markdown", &["md"])
-        .set_file_name(&name);
+fn save_as(
+    state: tauri::State<AppState>,
+    text: String,
+    name: String,
+    kind: Option<String>,
+) -> Result<Option<Document>> {
+    let kind = match kind.as_deref().unwrap_or("markdown") {
+        "markdown" => file_access::FileKind::Markdown,
+        "code" => file_access::FileKind::Code,
+        "html" => file_access::FileKind::Html,
+        "drawio" => file_access::FileKind::Drawio,
+        "excalidraw" => file_access::FileKind::Excalidraw,
+        "pdf" | "image" => return Err("媒体文件为只读，不能另存为文本。".into()),
+        _ => return Err("不支持的文件类型。".into()),
+    };
+    let name = file_access::save_as_name(&name, kind);
+    let mut dialog = rfd::FileDialog::new().set_file_name(&name);
+    if kind == file_access::FileKind::Markdown {
+        dialog = dialog.add_filter("Markdown", &["md", "markdown", "mdx"]);
+    }
     if let Some(root) = &state.access.lock().unwrap().root {
         dialog = dialog.set_directory(root);
     }

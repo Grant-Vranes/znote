@@ -76,6 +76,8 @@ import {
 import { openSearchPanel } from "@codemirror/search";
 import { initializeIcons } from "./ui-icons";
 import { NoteEditor } from "./editor";
+import { CodeEditor } from "./code-editor";
+import { classifyFile, isMediaKind } from "./file-types";
 import { DocumentText } from "./document-text";
 import { applyEditorTransaction, selectionInFrontMatter } from "./editor-commands";
 import { captureEditorSelection, restoreEditorSelection } from "./editor-commands";
@@ -103,6 +105,8 @@ import { mountFileMenu, parentPath, isWithin, renamedPath } from "./sidebar-cont
 import type { FileView, FileTarget, FileAction } from "./sidebar-context-menu";
 import type {
   DiskDocument,
+  OpenedFile,
+  FileKind,
   Workspace,
   FileEntry,
   Mode,
@@ -199,7 +203,9 @@ interface Tab {
   eol: string;
   dirty: boolean;
   conflict: boolean;
+  kind: FileKind;
   editor?: NoteEditor;
+  codeEditor?: CodeEditor;
   host?: HTMLElement;
   saving?: boolean;
 }
@@ -379,6 +385,7 @@ window.addEventListener("storage", event => {
     prefs.autoCheckUpdates = stored.autoCheckUpdates === true;
   } catch { /* Ignore invalid preferences from another window. */ }
 });
+
 function toast(message: string, error = false) {
   const el = document.createElement("div");
   el.className = "toast" + (error ? " error" : "");
@@ -547,7 +554,10 @@ systemTheme.addEventListener("change", () => {
 function applyPrefs() {
   applyAppTheme(document.documentElement, prefs.theme, prefs.themeBindings, systemTheme.matches);
   const colorMode = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
-  for (const tab of tabs) tab.editor?.setColorMode(colorMode);
+  for (const tab of tabs) {
+    tab.editor?.setColorMode(colorMode);
+    tab.codeEditor?.setColorMode(colorMode);
+  }
   document
     .querySelectorAll<HTMLElement>(".znote-render-scope")
     .forEach(
@@ -817,7 +827,7 @@ function renderTabs() {
   const markup = tabs
     .map(
       (t) =>
-        `<div class="tab ${t.id === activeId ? "active" : ""}" role="tab" aria-selected="${t.id === activeId}" data-tab="${t.id}">${icon("file-text")}<span>${escapeHtml(t.name)}</span>${t.dirty ? '<span class="dirty-dot"></span>' : ""}<button class="tab-close" title="${tr("关闭笔记")}" data-close="${t.id}">${icon("x")}</button></div>`,
+        `<div class="tab ${t.id === activeId ? "active" : ""}" role="tab" aria-selected="${t.id === activeId}" data-tab="${t.id}">${icon(t.kind === "image" ? "image" : t.kind === "pdf" ? "file" : t.kind === "code" ? "code-2" : "file-text")}<span>${escapeHtml(t.name)}</span>${t.dirty ? '<span class="dirty-dot"></span>' : ""}<button class="tab-close" title="${tr("关闭笔记")}" data-close="${t.id}">${icon("x")}</button></div>`,
     )
     .join("");
   if (markup === tabsMarkup) return;
@@ -858,7 +868,9 @@ function status(updateCursor = true) {
     return;
   }
   updateWordCount(tab);
-  $("#profile-status").textContent = `Markdown · ${tab.plan?.math.engine ?? prefs.render.math.engine}`;
+  $("#profile-status").textContent = tab.kind === "markdown"
+    ? `Markdown · ${tab.plan?.math.engine ?? prefs.render.math.engine}`
+    : `Code · ${tab.name}`;
   if (updateCursor) cursorStatus();
   $("#encoding").textContent = tab.bom ? "UTF-8 BOM" : "UTF-8";
   $("#eol").textContent = tab.eol;
@@ -885,7 +897,8 @@ function status(updateCursor = true) {
 function cursorStatus() {
   editorToolbar?.refresh();
   if (!current()) { $("#cursor-position").textContent = ""; return; }
-  const state = current()?.editor?.view.state;
+  const tab = current();
+  const state = tab?.editor?.view.state ?? tab?.codeEditor?.view.state;
   const pos = state?.selection.main.head || 0;
   const line = state?.doc.lineAt(pos);
   const range = state?.selection.main;
@@ -897,36 +910,46 @@ function cursorStatus() {
 }
 function syncPreviewToCursor() {
   const tab = current();
-  if (!prefs.syncPreview || mode !== "split" || !tab?.editor || renderedKey !== previewKey(tab) || !previewSurface.followsEditor) return;
+  if (tab?.kind !== "markdown" || !prefs.syncPreview || mode !== "split" || !tab.editor || renderedKey !== previewKey(tab) || !previewSurface.followsEditor) return;
   const state = tab.editor.view.state;
   previewSurface.scrollToSource(tab.text, state.doc.lineAt(state.selection.main.head).number, "editor");
 }
 function syncEditorToPreview(line: number) {
   const tab = current();
-  if (!prefs.syncEditorScroll || mode !== "split" || !tab?.editor || renderedKey !== previewKey(tab)) return;
+  if (tab?.kind !== "markdown" || !prefs.syncEditorScroll || mode !== "split" || !tab.editor || renderedKey !== previewKey(tab)) return;
   tab.editor.revealLine(line);
 }
+function handleTabTextChange(tab: Tab, update: () => void) {
+  update();
+  tab.revision++;
+  tab.dirty = !tab.source.matches(tab.base);
+  if (tab.id === activeId) {
+    renderTabs();
+    status(false);
+    if (side === "outline" || side === "search") scheduleSidebarRefresh();
+    scheduleRender();
+  }
+  scheduleRecovery();
+  clearTimeout(saveTimer);
+  if (prefs.autosave && tab.path && !tab.conflict)
+    saveTimer = setTimeout(() => void save(tab, false, true), 1400);
+}
 function mountTab(tab: Tab) {
-  if (tab.editor) return;
+  if (tab.editor || tab.codeEditor) return;
   tab.host = document.createElement("div");
   tab.host.className = "tab-editor";
   $("#editor-stage").append(tab.host);
+  if (tab.kind === "code") {
+    tab.codeEditor = new CodeEditor(tab.host, tab.text, tab.name, {
+      change: (text) => handleTabTextChange(tab, () => { tab.source.text = text; }),
+      cursor: () => { if (tab.id === activeId) cursorStatus(); },
+      save: () => void save(tab),
+    });
+    return;
+  }
+  if (tab.kind !== "markdown") return;
   tab.editor = new NoteEditor(tab.host, tab.source.doc, {
-    change: (doc) => {
-      tab.source.update(doc);
-      tab.revision++;
-      tab.dirty = !tab.source.matches(tab.base);
-      if (tab.id === activeId) {
-        renderTabs();
-        status(false);
-        if (side === "outline" || side === "search") scheduleSidebarRefresh();
-        scheduleRender();
-      }
-      scheduleRecovery();
-      clearTimeout(saveTimer);
-      if (prefs.autosave && tab.path && !tab.conflict)
-        saveTimer = setTimeout(() => void save(tab, false, true), 1400);
-    },
+    change: (doc) => handleTabTextChange(tab, () => tab.source.update(doc)),
     cursor: () => {
       if (tab.id === activeId) {
         previewSurface.editorIntent();
@@ -953,6 +976,10 @@ function activate(id: string) {
   const tab = current();
   if (!tab) return;
   setStartPageVisible(false);
+  writingArea.dataset.fileKind = tab.kind;
+  $(".editor-toolbar").hidden = tab.kind !== "markdown";
+  if (tab.kind === "code") writingArea.dataset.mode = "source";
+  else writingArea.dataset.mode = mode;
   mountTab(tab);
   for (const t of tabs) if (t.host) t.host.hidden = t.id !== id;
   renderTabs();
@@ -965,7 +992,7 @@ function activate(id: string) {
       .setTitle(`${tab.name} - ZNote`)
       .catch(() => {});
 }
-function addTab(doc?: DiskDocument, text = "") {
+function addTab(doc?: DiskDocument | OpenedFile, text = "", requestedKind?: FileKind) {
   if (doc) closedFiles = closedFiles.filter((path) => path !== doc.path);
   const existing = doc && tabs.find((t) => t.path === doc.path);
   if (existing) {
@@ -973,8 +1000,10 @@ function addTab(doc?: DiskDocument, text = "") {
     return existing;
   }
   const body = (doc?.text ?? text).replace(/\r\n/g, "\n");
+  const kind = requestedKind ?? (doc && "kind" in doc ? doc.kind : doc ? classifyFile(doc.path) : "markdown");
   const tab: Tab = {
     id: crypto.randomUUID(),
+    kind,
     name: doc ? doc.path.split(/[\\/]/).pop()! : tr("未命名.md"),
     path: doc?.path,
     source: new DocumentText(body),
@@ -994,6 +1023,7 @@ function addTab(doc?: DiskDocument, text = "") {
   return tab;
 }
 function setStartPageVisible(visible: boolean) {
+  if (visible) delete writingArea.dataset.fileKind;
   $("#start-page").hidden = !visible;
   $(".editor-toolbar").hidden = visible;
   writingArea.hidden = visible;
@@ -1043,7 +1073,8 @@ function showStartPage() {
   }
 }
 async function openSidebarFile(path: string): Promise<boolean> {
-  if (isNoteFile(path)) return openFile(path);
+  const kind = classifyFile(path);
+  if (kind === "markdown" || kind === "code") return openFile(path);
   if (!requireNative()) return false;
   try {
     if (isPictureFile(path)) {
@@ -1054,6 +1085,25 @@ async function openSidebarFile(path: string): Promise<boolean> {
   } catch (error) { fail(error); }
   return false;
 }
+function dispatchOpenedFiles(files: OpenedFile[]): Tab[] {
+  const opened: Tab[] = [];
+  for (const file of files) {
+    if (isMediaKind(file.kind)) {
+      toast(tr("此媒体查看器尚未加载。"), true);
+      continue;
+    }
+    if (file.kind !== "markdown" && file.kind !== "code") {
+      toast(tr("此文件类型的编辑器尚未加载。"), true);
+      continue;
+    }
+    if (typeof file.text !== "string") {
+      toast(tr("文件内容无法作为文本打开。"), true);
+      continue;
+    }
+    opened.push(addTab(file));
+  }
+  return opened;
+}
 async function openFile(path?: string): Promise<boolean> {
   if (!requireNative()) return false;
   try {
@@ -1061,7 +1111,9 @@ async function openFile(path?: string): Promise<boolean> {
       ? await invoke<DiskDocument>("read_file", { path })
       : await invoke<DiskDocument | null>("choose_file", { filterLabel: tr("Markdown / 文本") });
     if (doc) {
-      addTab(doc);
+      const file: OpenedFile = { ...doc, kind: classifyFile(doc.path), size: doc.text.length };
+      const opened = dispatchOpenedFiles([file]);
+      if (!opened.length) return false;
       await rememberRecentFile(doc.path);
       return true;
     }
@@ -1289,7 +1341,7 @@ async function fileAction(action: FileAction, target: FileTarget) {
       await invoke("trash_entry", { path: target.path });
       for (const tab of [...tabs]) if (isWithin(tab.path, target.path)) {
         if (tab.dirty) { tab.path = undefined; tab.base = ""; tab.hash = ""; tab.conflict = false; tab.plan = undefined; tab.name = tr("{0}（保留草稿）", [tab.name]); }
-        else { tab.editor?.destroy(); tab.host?.remove(); tabs = tabs.filter(item => item !== tab); }
+        else { tab.editor?.destroy(); tab.codeEditor?.destroy(); tab.host?.remove(); tabs = tabs.filter(item => item !== tab); }
       }
       closedFiles = closedFiles.filter(path => !isWithin(path, target.path));
       startRecentFiles = startRecentFiles.filter(path => !isWithin(path, target.path));
@@ -1333,6 +1385,7 @@ async function save(
   if (!tab || fileOperationBusy || !requireNative()) return false;
   if (tab.saving) return false;
   if (!as && tab.path && !tab.dirty) return true;
+  if (tab.codeEditor) tab.text = tab.codeEditor.flush();
   const snapshot = tab.text;
   tab.saving = true;
   status();
@@ -1341,7 +1394,8 @@ async function save(
       as || !tab.path
         ? await invoke<DiskDocument | null>("save_as", {
             text: snapshot,
-            name: tab.name.endsWith(".md") ? tab.name : tab.name + ".md",
+            name: tab.name,
+            kind: tab.kind,
           })
         : await invoke<DiskDocument>("save_file", {
             data: {
@@ -1405,8 +1459,10 @@ async function showExternal() {
       );
       if (!result) return;
       tab.editor?.destroy();
+      tab.codeEditor?.destroy();
       tab.host?.remove();
       tab.editor = undefined;
+      tab.codeEditor = undefined;
       tab.text = doc.text.replace(/\r\n/g, "\n");
       tab.revision++;
       tab.base = tab.text;
@@ -1442,6 +1498,7 @@ async function closeTab(id: string) {
   if (tab.path)
     closedFiles = [tab.path, ...closedFiles.filter((path) => path !== tab.path)].slice(0, 10);
   tab.editor?.destroy();
+  tab.codeEditor?.destroy();
   tab.host?.remove();
   tabs = tabs.filter((t) => t.id !== id);
   if (!tabs.length) {
@@ -1522,8 +1579,10 @@ async function restoreDrafts() {
         const tab = addTab(doc);
         if (item.dirty) {
           tab.editor?.destroy();
+          tab.codeEditor?.destroy();
           tab.host?.remove();
           tab.editor = undefined;
+          tab.codeEditor = undefined;
           tab.text = item.text;
           tab.revision++;
           tab.base = item.base;
@@ -1557,6 +1616,7 @@ async function restoreDrafts() {
   }
 }
 function setMode(value: Mode, remember = !externalView) {
+  if (current()?.kind === "code") return;
   editorToolbar?.close(false);
   if (mode === value && $(".writing-area").dataset.mode === value) return;
   hideSelectionToolbar();
@@ -1589,7 +1649,7 @@ function scheduleRender() {
   const generation = ++renderGeneration;
   previewSurface.cancel();
   const tab = current();
-  const key = tab && previewKey(tab);
+  const key = tab?.kind === "markdown" ? previewKey(tab) : undefined;
   if ((mode === "split" || mode === "read") && key && key !== renderedKey)
     renderTimer = setTimeout(() => void renderPreview(generation), 150);
 }
@@ -1612,7 +1672,7 @@ async function renderPreview(generation: number) {
 }
 async function renderPreviewNow(generation: number) {
   const tab = current();
-  if (!tab) return;
+  if (!tab || tab.kind !== "markdown") return;
   const key = previewKey(tab);
   const source = tab.text;
   if (!native) {
@@ -2641,13 +2701,20 @@ const actions: Record<string, () => unknown> = {
   commands: commandPalette,
   external: showExternal,
   find: () => {
-    if (!current()) return;
-    if (mode === "read") openPreviewFind();
-    else if (current()?.editor) openEditorSearchPanel(current()!.editor!.view);
+    const tab = current();
+    if (!tab) return;
+    if (tab.kind === "markdown" && mode === "read") openPreviewFind();
+    else {
+      const view = tab.editor?.view ?? tab.codeEditor?.view;
+      if (view) openEditorSearchPanel(view);
+    }
   },
   replace: () => {
-    if (mode === "read") setMode("source");
-    if (current()?.editor) openEditorSearchPanel(current()!.editor!.view);
+    const tab = current();
+    if (!tab) return;
+    if (tab.kind === "markdown" && mode === "read") setMode("source");
+    const view = tab.editor?.view ?? tab.codeEditor?.view;
+    if (view) openEditorSearchPanel(view);
   },
 };
 function commandPalette() {
@@ -2746,7 +2813,10 @@ document.addEventListener("click", (e) => {
       const line = tab.text.slice(0, position).split("\n").length;
       previewSurface.scrollToSource(tab.text, line);
     }
-    if (mode !== "read") tab?.editor?.jump(position);
+    if (mode !== "read") {
+      if (tab?.kind === "code") tab.codeEditor?.jump(position);
+      else tab?.editor?.jump(position);
+    }
     return;
   }
   const fmt = target.closest<HTMLElement>("[data-format]");
@@ -2889,10 +2959,12 @@ async function checkDisk() {
         if (tab.id === activeId) showConflict();
         return;
       }
-      const position = tab.editor?.view.state.selection.main.head || 0;
+      const position = tab.editor?.view.state.selection.main.head || tab.codeEditor?.view.state.selection.main.head || 0;
       tab.editor?.destroy();
+      tab.codeEditor?.destroy();
       tab.host?.remove();
       tab.editor = undefined;
+      tab.codeEditor = undefined;
       tab.text = doc.text.replace(/\r\n/g, "\n");
       tab.revision++;
       tab.base = tab.text;
@@ -2901,7 +2973,8 @@ async function checkDisk() {
       tab.eol = doc.eol;
       if (tab.id === activeId) {
         activate(tab.id);
-        current()?.editor?.jump(Math.min(position, tab.text.length));
+        if (current()?.kind === "code") current()?.codeEditor?.jump(Math.min(position, tab.text.length));
+        else current()?.editor?.jump(Math.min(position, tab.text.length));
       }
       toast(tr("已同步磁盘上的更改"));
       scheduleRecovery();

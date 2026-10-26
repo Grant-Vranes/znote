@@ -1257,6 +1257,25 @@ kbd {
 .writing-area[data-mode="source"] .cm-content {
   max-width: 1050px;
 }
+.writing-area[data-file-kind="code"] #preview-panel,
+.writing-area[data-file-kind="code"] .split-resizer {
+  display: none;
+}
+.writing-area[data-file-kind="code"] #editor-stage {
+  flex: 1;
+  width: 100%;
+  border: 0;
+}
+.writing-area[data-file-kind="code"] .cm-scroller {
+  font-family: "Cascadia Code", Consolas, "SFMono-Regular", monospace !important;
+  line-height: 1.65 !important;
+}
+.writing-area[data-file-kind="code"] .cm-content {
+  max-width: 1100px;
+}
+.main:has(.writing-area[data-file-kind="code"]) .focus-view-modes {
+  display: none;
+}
 .writing-area[data-mode="source"] #preview-panel {
   display: none;
 }
