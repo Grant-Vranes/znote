@@ -9,6 +9,15 @@ export interface DiskDocument {
   bom: boolean;
   eol: string;
 }
+export interface OpenedFile {
+  path: string;
+  kind: FileKind;
+  text?: string;
+  hash?: string;
+  bom?: boolean;
+  eol?: string;
+  size: number;
+}
 export interface FileEntry {
   name: string;
   path: string;

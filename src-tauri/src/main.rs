@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 use tauri::Manager;
+mod file_access;
 mod file_operations;
 mod open_requests;
 mod recovery;
@@ -400,6 +401,23 @@ fn choose_file(
     read_document(&path).map(Some)
 }
 #[tauri::command]
+fn choose_opened_file(state: tauri::State<AppState>) -> Result<Option<file_access::OpenedFile>> {
+    let Some(path) = rfd::FileDialog::new().set_title("打开文件").pick_file() else {
+        return Ok(None);
+    };
+    let path = path.canonicalize().map_err(|error| error.to_string())?;
+    let opened = file_access::read_opened_file(&path)?;
+    state.access.lock().unwrap().files.insert(path);
+    Ok(Some(opened))
+}
+#[tauri::command]
+fn open_file(state: tauri::State<AppState>, path: String) -> Result<file_access::OpenedFile> {
+    let path = authorize(&state, &path, false)?;
+    let opened = file_access::read_opened_file(&path)?;
+    state.access.lock().unwrap().files.insert(path);
+    Ok(opened)
+}
+#[tauri::command]
 fn read_file(state: tauri::State<AppState>, path: String) -> Result<Document> {
     let p = authorize(&state, &path, false)?;
     let doc = read_document(&p)?;
@@ -482,6 +500,7 @@ struct Save {
     eol: String,
 }
 fn save_document(path: &Path, save: &Save) -> Result<Document> {
+    file_access::ensure_text_writable(file_access::classify_path(path))?;
     let current = if path.exists() {
         hash(&fs::read(path).map_err(|e| e.to_string())?)
     } else {
@@ -725,6 +744,131 @@ async fn renderer_info(app: tauri::AppHandle) -> Result<Value> {
     .await
     .map_err(|e| e.to_string())?
 }
+fn local_resource_response(
+    status: tauri::http::StatusCode,
+    content_type: &str,
+    body: Vec<u8>,
+    sandbox: bool,
+) -> tauri::http::Response<Vec<u8>> {
+    let mut response = tauri::http::Response::builder()
+        .status(status)
+        .header(tauri::http::header::CONTENT_TYPE, content_type)
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Cache-Control", "no-store");
+    if sandbox {
+        response = response.header(
+            "Content-Security-Policy",
+            "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+        );
+    }
+    response.body(body).expect("valid local resource response")
+}
+
+fn resource_error(message: &str) -> tauri::http::Response<Vec<u8>> {
+    local_resource_response(
+        tauri::http::StatusCode::FORBIDDEN,
+        "text/plain; charset=utf-8",
+        message.as_bytes().to_vec(),
+        true,
+    )
+}
+
+fn serve_media_resource(
+    app: &tauri::AppHandle,
+    uri_path: &str,
+) -> Result<(Vec<u8>, &'static str, bool)> {
+    let token = uri_path.trim_matches('/');
+    if token.is_empty() || token.contains('/') {
+        return Err("无效的媒体资源 URL".into());
+    }
+    let path_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(token)
+        .map_err(|_| "无效的媒体资源 URL")?;
+    let path = String::from_utf8(path_bytes).map_err(|_| "无效的媒体资源路径")?;
+    let state = app.state::<AppState>();
+    let path = authorize(&state, &path, false)?;
+    let kind = match file_access::classify_path(&path) {
+        file_access::FileKind::Pdf => file_access::ResourceKind::Pdf,
+        file_access::FileKind::Image => file_access::ResourceKind::Image,
+        _ => return Err("不支持的媒体格式".into()),
+    };
+    let path = file_access::authorize_local_resource(&path, &path, kind)?;
+    let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
+    let limit = if kind == file_access::ResourceKind::Pdf {
+        256 * 1024 * 1024
+    } else {
+        20 * 1024 * 1024
+    };
+    if metadata.len() > limit {
+        return Err(if kind == file_access::ResourceKind::Pdf {
+            "PDF 超过 256 MB"
+        } else {
+            "图片超过 20 MB"
+        }
+        .into());
+    }
+    let content_type = file_access::mime_type(&path).ok_or("不支持的媒体格式")?;
+    let bytes = fs::read(&path).map_err(|error| error.to_string())?;
+    Ok((
+        bytes,
+        content_type,
+        kind == file_access::ResourceKind::Image,
+    ))
+}
+
+fn serve_html_resource(app: &tauri::AppHandle, uri_path: &str) -> Result<(Vec<u8>, &'static str)> {
+    let path = uri_path.trim_start_matches('/');
+    let (token, relative) = path.split_once('/').ok_or("无效的 HTML 资源 URL")?;
+    let document_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(token)
+        .map_err(|_| "无效的 HTML 文档 URL")?;
+    let document = String::from_utf8(document_bytes).map_err(|_| "无效的 HTML 文档路径")?;
+    let state = app.state::<AppState>();
+    let document = authorize(&state, &document, false)?;
+    if file_access::classify_path(&document) != file_access::FileKind::Html {
+        return Err("本地 HTML 文档无效".into());
+    }
+    let relative = file_access::decode_uri_path(relative)?;
+    let requested = if relative == "__znote_document__.html" {
+        document.clone()
+    } else {
+        let relative_path = Path::new(&relative);
+        if relative.is_empty()
+            || relative.contains('\\')
+            || relative.contains(':')
+            || relative_path.is_absolute()
+            || relative_path.components().any(|part| {
+                matches!(
+                    part,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            return Err("本地 HTML 资源路径无效".into());
+        }
+        document
+            .parent()
+            .ok_or("HTML 文档缺少父目录")?
+            .join(relative_path)
+    };
+    let requested = file_access::authorize_local_resource(
+        &document,
+        &requested,
+        file_access::ResourceKind::HtmlAsset,
+    )?;
+    let content_type = file_access::mime_type(&requested).ok_or("不支持的 HTML 资源格式")?;
+    let metadata = fs::metadata(&requested).map_err(|error| error.to_string())?;
+    if metadata.len() > 64 * 1024 * 1024 {
+        return Err("HTML 资源超过 64 MB".into());
+    }
+    Ok((
+        fs::read(requested).map_err(|error| error.to_string())?,
+        content_type,
+    ))
+}
+
 #[tauri::command]
 fn open_url(url: String) -> Result<()> {
     if !url.starts_with("https://") && !url.starts_with("http://") {
@@ -764,6 +908,32 @@ fn main() {
         requests.push(request);
     }
     let mut builder = tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol("local-media", |context, request, responder| {
+            let app = context.app_handle().clone();
+            let path = request.uri().path().to_owned();
+            std::thread::spawn(move || match serve_media_resource(&app, &path) {
+                Ok((bytes, mime, sandbox)) => responder.respond(local_resource_response(
+                    tauri::http::StatusCode::OK,
+                    mime,
+                    bytes,
+                    sandbox,
+                )),
+                Err(message) => responder.respond(resource_error(&message)),
+            });
+        })
+        .register_asynchronous_uri_scheme_protocol("local-html", |context, request, responder| {
+            let app = context.app_handle().clone();
+            let path = request.uri().path().to_owned();
+            std::thread::spawn(move || match serve_html_resource(&app, &path) {
+                Ok((bytes, mime)) => responder.respond(local_resource_response(
+                    tauri::http::StatusCode::OK,
+                    mime,
+                    bytes,
+                    false,
+                )),
+                Err(message) => responder.respond(resource_error(&message)),
+            });
+        })
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(requests)
         .manage(open_requests::PendingOpens::default());
@@ -829,6 +999,8 @@ fn main() {
             restore_workspace,
             refresh_workspace,
             choose_file,
+            choose_opened_file,
+            open_file,
             read_file,
             list_recent_files,
             clear_recent_files,

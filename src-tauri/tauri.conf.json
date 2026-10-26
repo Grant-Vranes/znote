@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' data:; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src ipc: http://ipc.localhost https://api.iconify.design; frame-src 'self' blob:; object-src 'none'; base-uri 'self'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' data: local-html: http://local-html.localhost; img-src 'self' data: blob: https: local-media: local-html: http://local-media.localhost http://local-html.localhost; font-src 'self' data: local-html: http://local-html.localhost; media-src 'self' blob: local-media: local-html: http://local-media.localhost http://local-html.localhost; connect-src ipc: http://ipc.localhost https://api.iconify.design local-html: local-media: http://local-html.localhost http://local-media.localhost; frame-src 'self' blob: local-html: local-media: http://local-html.localhost http://local-media.localhost; object-src 'none'; base-uri 'self'"
     }
   },
   "bundle": {
