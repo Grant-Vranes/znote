@@ -1,5 +1,7 @@
 import type { RenderSettings } from "./render-config";
 
+export type FileKind = "markdown" | "code" | "html" | "drawio" | "excalidraw" | "pdf" | "image";
+
 export interface DiskDocument {
   path: string;
   text: string;
