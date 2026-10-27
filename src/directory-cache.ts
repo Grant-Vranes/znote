@@ -1,9 +1,13 @@
 import type { Workspace } from "./types";
+import { classifyFile } from "./file-types";
 
 export const directoryKey = (path: string) => path.replace(/\\/g, "/").replace(/\/$/, "").toLowerCase();
-export const isNoteFile = (path: string) => /\.(md|markdown|txt)$/i.test(path);
-export const isPictureFile = (path: string) => /\.(png|jpe?g|gif|webp|svg)$/i.test(path);
-export const fileGlyph = (path: string) => isNoteFile(path) ? "file-text" : isPictureFile(path) ? "image" : "file";
+export const isNoteFile = (path: string) => /\.(md|markdown|mdx|txt)$/i.test(path);
+export const isPictureFile = (path: string) => /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i.test(path);
+export const fileGlyph = (path: string) => {
+  const kind = classifyFile(path);
+  return kind === "markdown" ? "file-text" : kind === "code" ? "code-2" : kind === "image" ? "image" : "file";
+};
 
 /** Bounded LRU, concurrent request coalescing, and explicit invalidation after writes. */
 export class DirectoryCache {

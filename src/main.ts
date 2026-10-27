@@ -1,4 +1,4 @@
-import { DirectoryCache, directoryKey, isNoteFile, isPictureFile, fileGlyph } from "./directory-cache";
+import { DirectoryCache, directoryKey, isNoteFile, fileGlyph } from "./directory-cache";
 import { normalizeImageSettings, imageSettingsMarkup, imageExtension, imageMarkdown, type ImageSettings } from "./image-settings";
 import { readClipboardImages } from "./image-clipboard";
 import { tr, getLanguage, setLanguage, normalizeLanguage, languagePacks, onLanguageChange, localizeUi, localizeError } from "./i18n";
@@ -77,6 +77,7 @@ import { openSearchPanel } from "@codemirror/search";
 import { initializeIcons } from "./ui-icons";
 import { NoteEditor } from "./editor";
 import { CodeEditor } from "./code-editor";
+import { MediaViewer } from "./media-viewer";
 import { classifyFile, isMediaKind } from "./file-types";
 import { DocumentText } from "./document-text";
 import { applyEditorTransaction, selectionInFrontMatter } from "./editor-commands";
@@ -206,6 +207,7 @@ interface Tab {
   kind: FileKind;
   editor?: NoteEditor;
   codeEditor?: CodeEditor;
+  mediaViewer?: MediaViewer;
   host?: HTMLElement;
   saving?: boolean;
 }
@@ -842,6 +844,11 @@ function updateWordCount(tab: Tab) {
   clearTimeout(wordCountTimer);
   const render = () => {
     if (current() !== tab) return;
+    if (isMediaKind(tab.kind)) {
+      $("#word-count").textContent = "";
+      $("#word-count").removeAttribute("aria-busy");
+      return;
+    }
     let cached = wordCounts.get(tab);
     if (cached?.revision !== tab.revision) {
       cached = {revision: tab.revision, count: wordCount(tab.text)};
@@ -870,10 +877,11 @@ function status(updateCursor = true) {
   updateWordCount(tab);
   $("#profile-status").textContent = tab.kind === "markdown"
     ? `Markdown · ${tab.plan?.math.engine ?? prefs.render.math.engine}`
-    : `Code · ${tab.name}`;
+    : tab.kind === "code" ? `Code · ${tab.name}` : `${tab.kind === "pdf" ? "PDF" : tab.kind === "image" ? tr("图片") : tab.kind} · ${tab.name}`;
   if (updateCursor) cursorStatus();
-  $("#encoding").textContent = tab.bom ? "UTF-8 BOM" : "UTF-8";
-  $("#eol").textContent = tab.eol;
+  $("#encoding").textContent = isMediaKind(tab.kind) ? "" : tab.bom ? "UTF-8 BOM" : "UTF-8";
+  $("#eol").textContent = isMediaKind(tab.kind) ? "" : tab.eol;
+  $<HTMLButtonElement>(".save-btn").disabled = isMediaKind(tab.kind);
   const markup =
     icon(
       tab.conflict ? "alert-triangle" : tab.dirty ? "more-horizontal" : "check",
@@ -884,9 +892,11 @@ function status(updateCursor = true) {
         ? tr("检测到外部修改")
         : tab.dirty
           ? tr("有未保存的更改")
-          : tab.path
-            ? tr("所有更改已保存")
-            : tr("本地草稿"));
+          : isMediaKind(tab.kind)
+        ? tr("只读")
+        : tab.path
+          ? tr("所有更改已保存")
+          : tr("本地草稿"));
   $("#save-status").classList.toggle("unsaved", tab.dirty);
   if (markup !== saveStatusMarkup) {
     saveStatusMarkup = markup;
@@ -898,6 +908,7 @@ function cursorStatus() {
   editorToolbar?.refresh();
   if (!current()) { $("#cursor-position").textContent = ""; return; }
   const tab = current();
+  if (tab && isMediaKind(tab.kind)) { $("#cursor-position").textContent = ""; return; }
   const state = tab?.editor?.view.state ?? tab?.codeEditor?.view.state;
   const pos = state?.selection.main.head || 0;
   const line = state?.doc.lineAt(pos);
@@ -935,10 +946,26 @@ function handleTabTextChange(tab: Tab, update: () => void) {
     saveTimer = setTimeout(() => void save(tab, false, true), 1400);
 }
 function mountTab(tab: Tab) {
-  if (tab.editor || tab.codeEditor) return;
+  if (tab.editor || tab.codeEditor || tab.mediaViewer) return;
   tab.host = document.createElement("div");
   tab.host.className = "tab-editor";
   $("#editor-stage").append(tab.host);
+  if (isMediaKind(tab.kind)) {
+    tab.mediaViewer = new MediaViewer(tab.host, {
+      path: tab.path!,
+      name: tab.name,
+      kind: tab.kind,
+    }, {
+      saveAs: async () => {
+        if (!requireNative() || !tab.path) return;
+        try {
+          const destination = await invoke<string | null>("save_media_as", { path: tab.path });
+          if (destination) toast(tr("已另存为 {0}", [displayPath(destination)]));
+        } catch (error) { fail(error); }
+      },
+    });
+    return;
+  }
   if (tab.kind === "code") {
     tab.codeEditor = new CodeEditor(tab.host, tab.text, tab.name, {
       change: (text) => handleTabTextChange(tab, () => { tab.source.text = text; }),
@@ -978,7 +1005,7 @@ function activate(id: string) {
   setStartPageVisible(false);
   writingArea.dataset.fileKind = tab.kind;
   $(".editor-toolbar").hidden = tab.kind !== "markdown";
-  if (tab.kind === "code") writingArea.dataset.mode = "source";
+  if (tab.kind !== "markdown") writingArea.dataset.mode = "source";
   else writingArea.dataset.mode = mode;
   mountTab(tab);
   for (const t of tabs) if (t.host) t.host.hidden = t.id !== id;
@@ -1074,14 +1101,10 @@ function showStartPage() {
 }
 async function openSidebarFile(path: string): Promise<boolean> {
   const kind = classifyFile(path);
-  if (kind === "markdown" || kind === "code") return openFile(path);
+  if (kind === "markdown" || kind === "code" || isMediaKind(kind)) return openFile(path);
   if (!requireNative()) return false;
   try {
-    if (isPictureFile(path)) {
-      const data = await invoke<string>("read_asset", { document: path, relative: path.split(/[\\/]/).pop()! });
-      closeModal();
-      modal(path.split(/[\\/]/).pop()!, `<div class="attachment-preview"><img src="${escapeHtml(data)}" alt="${escapeHtml(path.split(/[\\/]/).pop()!)}"></div>`);
-    } else await invoke("reveal_entry", { path });
+    await invoke("reveal_entry", { path });
   } catch (error) { fail(error); }
   return false;
 }
@@ -1089,7 +1112,7 @@ function dispatchOpenedFiles(files: OpenedFile[]): Tab[] {
   const opened: Tab[] = [];
   for (const file of files) {
     if (isMediaKind(file.kind)) {
-      toast(tr("此媒体查看器尚未加载。"), true);
+      opened.push(addTab(file));
       continue;
     }
     if (file.kind !== "markdown" && file.kind !== "code") {
@@ -1107,6 +1130,13 @@ function dispatchOpenedFiles(files: OpenedFile[]): Tab[] {
 async function openFile(path?: string): Promise<boolean> {
   if (!requireNative()) return false;
   try {
+    if (path && isMediaKind(classifyFile(path))) {
+      const file = await invoke<OpenedFile>("open_file", { path });
+      const opened = dispatchOpenedFiles([file]);
+      if (!opened.length) return false;
+      await rememberRecentFile(path);
+      return true;
+    }
     const doc = path
       ? await invoke<DiskDocument>("read_file", { path })
       : await invoke<DiskDocument | null>("choose_file", { filterLabel: tr("Markdown / 文本") });
@@ -1341,7 +1371,7 @@ async function fileAction(action: FileAction, target: FileTarget) {
       await invoke("trash_entry", { path: target.path });
       for (const tab of [...tabs]) if (isWithin(tab.path, target.path)) {
         if (tab.dirty) { tab.path = undefined; tab.base = ""; tab.hash = ""; tab.conflict = false; tab.plan = undefined; tab.name = tr("{0}（保留草稿）", [tab.name]); }
-        else { tab.editor?.destroy(); tab.codeEditor?.destroy(); tab.host?.remove(); tabs = tabs.filter(item => item !== tab); }
+        else { tab.editor?.destroy(); tab.codeEditor?.destroy(); tab.mediaViewer?.destroy(); tab.host?.remove(); tabs = tabs.filter(item => item !== tab); }
       }
       closedFiles = closedFiles.filter(path => !isWithin(path, target.path));
       startRecentFiles = startRecentFiles.filter(path => !isWithin(path, target.path));
@@ -1382,7 +1412,7 @@ async function save(
   as = false,
   quiet = false,
 ): Promise<boolean> {
-  if (!tab || fileOperationBusy || !requireNative()) return false;
+  if (!tab || isMediaKind(tab.kind) || fileOperationBusy || !requireNative()) return false;
   if (tab.saving) return false;
   if (!as && tab.path && !tab.dirty) return true;
   if (tab.codeEditor) tab.text = tab.codeEditor.flush();
@@ -1499,6 +1529,7 @@ async function closeTab(id: string) {
     closedFiles = [tab.path, ...closedFiles.filter((path) => path !== tab.path)].slice(0, 10);
   tab.editor?.destroy();
   tab.codeEditor?.destroy();
+  tab.mediaViewer?.destroy();
   tab.host?.remove();
   tabs = tabs.filter((t) => t.id !== id);
   if (!tabs.length) {
@@ -1513,10 +1544,11 @@ async function closeTab(id: string) {
 function recoveryData() {
   return tabs
     .filter(
-      (t) =>
+      (t) => !isMediaKind(t.kind) && (
         t.dirty ||
         t.path ||
-        (!t.path && t.text),
+        (!t.path && t.text)
+      ),
     )
     .map((t) => ({
       id: t.id,
@@ -1616,7 +1648,7 @@ async function restoreDrafts() {
   }
 }
 function setMode(value: Mode, remember = !externalView) {
-  if (current()?.kind === "code") return;
+  if (current() && current()!.kind !== "markdown") return;
   editorToolbar?.close(false);
   if (mode === value && $(".writing-area").dataset.mode === value) return;
   hideSelectionToolbar();
@@ -2940,7 +2972,7 @@ let checkingDisk = false;
 async function checkDisk() {
   if (!native || !mounted || checkingDisk) return;
   const tab = current();
-  if (!tab?.path || tab.saving) return;
+  if (!tab?.path || tab.saving || isMediaKind(tab.kind)) return;
   checkingDisk = true;
   try {
     const value = await invoke<string>("file_hash", { path: tab.path });

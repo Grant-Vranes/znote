@@ -584,6 +584,42 @@ fn save_as(
     .map(Some)
 }
 #[tauri::command]
+fn save_media_as(state: tauri::State<AppState>, path: String) -> Result<Option<String>> {
+    let source = authorize(&state, &path, false)?;
+    let (label, extension) = match file_access::classify_path(&source) {
+        file_access::FileKind::Pdf => ("PDF 文件", "pdf"),
+        file_access::FileKind::Image => (
+            "图片",
+            source.extension().and_then(|value| value.to_str()).unwrap_or("png"),
+        ),
+        _ => return Err("仅支持另存图片或 PDF 文件。".into()),
+    };
+    let name = source.file_name().and_then(|value| value.to_str()).unwrap_or("media");
+    let mut dialog = rfd::FileDialog::new()
+        .set_file_name(name)
+        .add_filter(label, &[extension]);
+    if let Some(root) = &state.access.lock().map_err(|error| error.to_string())?.root {
+        dialog = dialog.set_directory(root);
+    }
+    let Some(destination) = dialog.save_file() else {
+        return Ok(None);
+    };
+    let destination = if destination.exists() {
+        destination.canonicalize().map_err(|error| error.to_string())?
+    } else {
+        destination
+            .parent()
+            .ok_or("另存位置缺少父目录")?
+            .canonicalize()
+            .map_err(|error| error.to_string())?
+            .join(destination.file_name().ok_or("另存文件名无效")?)
+    };
+    file_access::copy_media_file(&source, &destination)?;
+    state.access.lock().map_err(|error| error.to_string())?.files.insert(destination.clone());
+    Ok(Some(destination.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
 fn create_note(
     state: tauri::State<AppState>,
     name: String,
@@ -797,10 +833,7 @@ fn serve_media_resource(
     if token.is_empty() || token.contains('/') {
         return Err("无效的媒体资源 URL".into());
     }
-    let path_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(token)
-        .map_err(|_| "无效的媒体资源 URL")?;
-    let path = String::from_utf8(path_bytes).map_err(|_| "无效的媒体资源路径")?;
+    let path = file_access::decode_path_token(token)?;
     let state = app.state::<AppState>();
     let path = authorize(&state, &path, false)?;
     let kind = match file_access::classify_path(&path) {
@@ -835,10 +868,7 @@ fn serve_media_resource(
 fn serve_html_resource(app: &tauri::AppHandle, uri_path: &str) -> Result<(Vec<u8>, &'static str)> {
     let path = uri_path.trim_start_matches('/');
     let (token, relative) = path.split_once('/').ok_or("无效的 HTML 资源 URL")?;
-    let document_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(token)
-        .map_err(|_| "无效的 HTML 文档 URL")?;
-    let document = String::from_utf8(document_bytes).map_err(|_| "无效的 HTML 文档路径")?;
+    let document = file_access::decode_path_token(token)?;
     let state = app.state::<AppState>();
     let document = authorize(&state, &document, false)?;
     if file_access::classify_path(&document) != file_access::FileKind::Html {
@@ -1027,6 +1057,7 @@ fn main() {
             search_workspace,
             save_file,
             save_as,
+            save_media_as,
             create_note,
             file_operations::create_folder,
             file_operations::rename_entry,

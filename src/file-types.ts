@@ -43,7 +43,7 @@ export function classifyFile(path: string): FileKind {
   return "code";
 }
 
-export function isMediaKind(kind: FileKind): boolean {
+export function isMediaKind(kind: FileKind): kind is "pdf" | "image" {
   return kind === "pdf" || kind === "image";
 }
 

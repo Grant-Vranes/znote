@@ -1,4 +1,5 @@
 use super::{hash, Result};
+use base64::Engine as _;
 use serde::Serialize;
 use std::{fs, path::Path};
 
@@ -70,6 +71,57 @@ pub(crate) fn classify_path(path: &Path) -> FileKind {
     }
 }
 
+pub(crate) fn copy_media_file(source: &Path, destination: &Path) -> Result<()> {
+    let source = source.canonicalize().map_err(|error| error.to_string())?;
+    let kind = match classify_path(&source) {
+        FileKind::Image => ResourceKind::Image,
+        FileKind::Pdf => ResourceKind::Pdf,
+        _ => return Err("仅支持另存图片或 PDF 文件。".into()),
+    };
+    let source = authorize_local_resource(&source, &source, kind)?;
+    let source_extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let parent = destination
+        .parent()
+        .ok_or("另存位置缺少父目录")?
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let destination = if destination.exists() {
+        destination
+            .canonicalize()
+            .map_err(|error| error.to_string())?
+    } else {
+        parent.join(destination.file_name().ok_or("另存文件名无效")?)
+    };
+    let destination_extension = destination
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if source_extension != destination_extension {
+        return Err("另存时必须保留原文件扩展名。".into());
+    }
+    if source == destination {
+        return Ok(());
+    }
+    let size = fs::metadata(&source)
+        .map_err(|error| error.to_string())?
+        .len();
+    let limit = if kind == ResourceKind::Pdf {
+        256 * 1024 * 1024
+    } else {
+        20 * 1024 * 1024
+    };
+    if size > limit {
+        return Err("文件过大，无法另存。".into());
+    }
+    let bytes = fs::read(&source).map_err(|error| error.to_string())?;
+    super::atomic_write(&destination, &bytes)
+}
+
 pub(crate) fn save_as_name(name: &str, kind: FileKind) -> String {
     if kind == FileKind::Markdown
         && ![".md", ".markdown", ".mdx"]
@@ -129,6 +181,13 @@ pub(crate) fn read_opened_file(path: &Path) -> Result<OpenedFile> {
         eol: Some(eol.to_owned()),
         size,
     })
+}
+
+pub(crate) fn decode_path_token(value: &str) -> Result<String> {
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| "无效的本地资源 URL")?;
+    String::from_utf8(decoded).map_err(|_| "本地资源路径不是有效 UTF-8".into())
 }
 
 pub(crate) fn decode_uri_path(value: &str) -> Result<String> {
@@ -327,6 +386,15 @@ mod tests {
     }
 
     #[test]
+    fn decodes_media_path_tokens_as_utf8_file_paths() {
+        assert_eq!(
+            super::decode_path_token("QzovTm90ZXMv5Lit5paHIGNvdmVyICMxLnBuZw").unwrap(),
+            "C:/Notes/中文 cover #1.png"
+        );
+        assert!(super::decode_path_token("not-valid-base64").is_err());
+    }
+
+    #[test]
     fn decodes_uri_paths_without_treating_plus_as_space() {
         assert_eq!(
             super::decode_uri_path("images/my%20photo%23one.png").unwrap(),
@@ -335,6 +403,19 @@ mod tests {
         assert_eq!(super::decode_uri_path("a+b.css").unwrap(), "a+b.css");
         assert!(super::decode_uri_path("bad%2").is_err());
         assert!(super::decode_uri_path("%FF").is_err());
+    }
+
+    #[test]
+    fn save_as_copies_media_bytes_and_keeps_the_media_extension() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("source.png");
+        let destination = dir.path().join("copy.png");
+        fs::write(&source, [0, 255, 17, 0]).unwrap();
+
+        super::copy_media_file(&source, &destination).unwrap();
+
+        assert_eq!(fs::read(&destination).unwrap(), [0, 255, 17, 0]);
+        assert!(super::copy_media_file(&source, &dir.path().join("copy.pdf")).is_err());
     }
 
     #[test]

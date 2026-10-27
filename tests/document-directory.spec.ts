@@ -23,6 +23,12 @@ test.beforeEach(async ({ page }) => {
         if (command === "choose_workspace") return tree("D:/work");
         if (command === "choose_file") return doc(app.nextFile);
         if (command === "read_file") return doc(args.path);
+        if (command === "open_file") return {
+          path: args.path,
+          kind: args.path.toLowerCase().endsWith(".pdf") ? "pdf" : "image",
+          size: 16,
+        };
+        if (command === "save_media_as") return "D:/exports/picture.png";
         if (command === "save_file") {
           if (app.conflictNextSave) {
             app.conflictNextSave = false;
@@ -63,6 +69,7 @@ test("workspace stays fixed while external document directories appear and disap
 });
 
 test("code files open in a plain-text-capable editor tab and become dirty on edits", async ({ page }) => {
+  await expect(page.locator('[data-file="D:/single/script.py"] svg.lucide-code-2')).toHaveCount(1);
   await page.locator('[data-file="D:/single/script.py"]').click();
   await expect(page.locator("#tabs .tab")).toHaveCount(2);
   await expect(page.locator(".writing-area")).toHaveAttribute("data-file-kind", "code");
@@ -108,7 +115,21 @@ test("closing a dirty code tab uses the shared save-or-discard prompt", async ({
   await expect(page.locator(".tab-editor:not([hidden]) .cm-editor[data-language='Python']")).toHaveCount(0);
 });
 
-test("attachments load on expansion and images preview without opening a note", async ({ page }) => {
+test("PDF files open in a read-only media tab instead of the external viewer", async ({ page }) => {
+  await page.locator('[data-file="D:/single/manual.pdf"]').click();
+  await expect(page.locator("#tabs .tab")).toHaveCount(2);
+  await expect(page.locator(".writing-area")).toHaveAttribute("data-file-kind", "pdf");
+  await expect(page.locator("iframe.pdf-document")).toHaveAttribute("src", /^local-media:\/\/localhost\//);
+  await expect(page.locator(".save-btn")).toBeDisabled();
+  const commands = await page.evaluate(() => (window as any).calls);
+  expect(commands.some((call: any) => call.command === "open_file" && call.args.path.endsWith("manual.pdf"))).toBe(true);
+  expect(commands.some((call: any) => call.command === "read_file" && call.args.path.endsWith("manual.pdf"))).toBe(false);
+  await page.locator('[data-file="D:/single/manual.pdf"]').click();
+  await expect(page.locator("#tabs .tab")).toHaveCount(2);
+  await expect(page.locator("iframe.pdf-document")).toHaveCount(1);
+});
+
+test("attachments load on expansion and images open as media tabs", async ({ page }) => {
   expect(await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === "list_directory").length)).toBe(0);
   const folder = page.locator('[data-folder="D:/single/assets"]');
   await folder.click();
@@ -116,11 +137,12 @@ test("attachments load on expansion and images preview without opening a note", 
   await folder.click(); await folder.click();
   expect(await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === "list_directory").length)).toBe(1);
   await page.locator('[data-file="D:/single/assets/picture.png"]').click();
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.locator("#tabs .tab")).toHaveCount(1);
-  await page.keyboard.press("Escape");
-  await page.locator('[data-file="D:/single/manual.pdf"]').click();
-  expect(await page.evaluate(() => (window as any).calls.some((c: any) => c.command === "reveal_entry" && c.args.path.endsWith("manual.pdf")))).toBe(true);
+  await expect(page.locator("#tabs .tab")).toHaveCount(2);
+  await expect(page.locator(".writing-area")).toHaveAttribute("data-file-kind", "image");
+  await expect(page.locator(".media-image")).toHaveAttribute("src", /^local-media:\/\/localhost\//);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "另存为" }).click();
+  await expect(page.locator("#toasts")).toContainText("已另存为");
 });
 
 
