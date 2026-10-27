@@ -1036,6 +1036,11 @@ function mountTab(tab: Tab) {
         hideSelectionToolbar();
       }
     },
+    scroll: (line) => {
+      if (tab.id !== activeId || !prefs.syncPreview || mode !== "split" || renderedKey !== previewKey(tab)) return;
+      previewSurface.editorIntent();
+      previewSurface.scrollToSource(tab.text, line, "editor-scroll");
+    },
     save: () => void save(tab),
     image: (file) => void insertImages([file], tab),
     images: (files) => void insertImages(files, tab),

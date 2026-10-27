@@ -18,6 +18,7 @@ const darkTheme = EditorView.theme({}, { dark: true });
 export interface EditorCallbacks {
   change: (doc: Text) => void;
   cursor: () => void;
+  scroll?: (line: number) => void;
   save: () => void;
   image: (file: File) => void;
   images?: (files: File[]) => void;
@@ -28,6 +29,7 @@ export interface EditorCallbacks {
 /** One lossless Markdown source editor, reused in edit and split views. */
 export class NoteEditor {
   readonly view: EditorView;
+  private scrollIntent = false;
   private readonly locale = new Compartment();
   private readonly appearance = new Compartment();
   private readonly disposeLanguage: () => void;
@@ -65,10 +67,23 @@ export class NoteEditor {
           keymap.of([...shortcuts, ...markdownKeymap, ...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) callbacks.change(update.state.doc);
-            if (update.selectionSet || update.docChanged) callbacks.cursor();
+            if (update.selectionSet || update.docChanged) {
+              this.scrollIntent = false;
+              callbacks.cursor();
+            }
             else if (syntaxTree(update.startState) !== syntaxTree(update.state)) callbacks.formatting?.();
           }),
           EditorView.domEventHandlers({
+            wheel: () => { this.scrollIntent = true; },
+            touchmove: () => { this.scrollIntent = true; },
+            pointerdown: () => { this.scrollIntent = true; },
+            keydown: () => { this.scrollIntent = false; },
+            scroll: (_event, view) => {
+              if (!this.scrollIntent) return;
+              const y = view.scrollDOM.getBoundingClientRect().top + view.scrollDOM.clientHeight * 0.28;
+              const block = view.lineBlockAtHeight(y - view.documentTop);
+              callbacks.scroll?.(view.state.doc.lineAt(block.from).number);
+            },
             paste: event => {
               const files = Array.from(event.clipboardData?.files || []).filter(isImageFile);
               if (!files.length) return false;
@@ -117,6 +132,9 @@ export class NoteEditor {
     this.view.focus();
   }
   revealLine(line: number) {
+    // Keep viewport-only transactions from echoing back into the preview.
+    // A new editor scroll gesture takes control again.
+    this.scrollIntent = false;
     const doc = this.view.state.doc;
     const pos = doc.line(Math.max(1, Math.min(line, doc.lines))).from;
     this.view.dispatch({effects: EditorView.scrollIntoView(pos, {

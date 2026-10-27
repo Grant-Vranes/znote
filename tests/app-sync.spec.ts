@@ -85,6 +85,80 @@ test("split mode syncs front matter and nested or collapsed callouts after metad
   await expect(page.locator("#cursor-position")).toContainText("行 1");
 });
 
+test("split mode follows editor scrolling in both directions without moving the cursor or bouncing", async ({ page }) => {
+  const source = Array.from({ length: 120 }, (_, i) => `paragraph ${i}`).join("\n\n");
+  await page.addInitScript(source => {
+    const appWindow = window as any;
+    appWindow.isTauri = true;
+    let callback = 0;
+    appWindow.__TAURI_INTERNALS__ = {
+      metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main", windowLabel: "main" } },
+      transformCallback: () => ++callback,
+      unregisterCallback: () => {},
+      invoke: async (command: string, args: any) => {
+        if (command === "read_recovery") return [{ name: "scroll.md", text: source, base: source, dirty: true }];
+        if (command === "renderer_info") return { versions: { zensical: "test" } };
+        if (command !== "render_markdown") return null;
+        let offset = 0;
+        const entries: any[] = [];
+        const html = args.text.split("\n\n").map((text: string, i: number) => {
+          entries.push({ id: String(i), kind: "p", precision: "exact", from: offset, to: offset + text.length });
+          offset += text.length + 2;
+          return `<p data-zn-node="${i}">${text}</p>`;
+        }).join("");
+        return { html, toc: [], warnings: [], meta: {}, sourceMap: { version: 1, offsetEncoding: "utf-16", entries } };
+      },
+    };
+  }, source);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.locator('[data-mode="split"]').click();
+  const frame = page.frameLocator("#preview-content iframe");
+  await expect(frame.locator("p").last()).toHaveText("paragraph 119");
+  const scroller = page.locator(".tab-editor:not([hidden]) .cm-scroller");
+  const previewBody = frame.locator("body");
+  const expectAligned = async () => {
+    await expect.poll(async () => {
+      const text = await scroller.evaluate(element => {
+        const y = element.getBoundingClientRect().top + element.clientHeight * .28;
+        const lines = Array.from(element.querySelectorAll<HTMLElement>(".cm-line"));
+        return lines.filter(line => line.textContent?.startsWith("paragraph "))
+          .sort((a, b) => Math.abs(a.getBoundingClientRect().top - y) - Math.abs(b.getBoundingClientRect().top - y))[0]?.textContent;
+      });
+      return frame.locator("p").filter({ hasText: new RegExp(`^${text}$`) }).evaluate(element =>
+        Math.abs(element.getBoundingClientRect().top - document.documentElement.clientHeight * .28));
+    }).toBeLessThan(35);
+  };
+  await scroller.hover();
+  await page.mouse.wheel(0, 1600);
+  await expect.poll(() => scroller.evaluate(element => element.scrollTop)).toBeGreaterThan(1000);
+  await expectAligned();
+  await expect(page.locator("#cursor-position")).toContainText("行 1");
+
+  // Preview-driven scrolling must not be echoed back as editor input.
+  await previewBody.hover();
+  await page.mouse.wheel(0, 900);
+  await expectAligned();
+  const previewTop = await previewBody.evaluate(() => window.scrollY);
+  await page.waitForTimeout(350);
+  expect(await previewBody.evaluate(() => window.scrollY)).toBeCloseTo(previewTop, 0);
+
+  // Scrolling the editor takes control again, without requiring a cursor move.
+  await scroller.hover();
+  await page.mouse.wheel(0, -700);
+  await expectAligned();
+  await expect(page.locator("#cursor-position")).toContainText("行 1");
+
+  await page.locator('[data-action="settings"]').first().click();
+  await page.locator('[data-settings-tab="writing"]').click();
+  await page.locator("#sync-preview").uncheck();
+  await page.locator("#modal-root [data-dismiss]").last().click();
+  const disabledTop = await previewBody.evaluate(() => window.scrollY);
+  await scroller.hover();
+  await page.mouse.wheel(0, 600);
+  await page.waitForTimeout(350);
+  expect(await previewBody.evaluate(() => window.scrollY)).toBeCloseTo(disabledTop, 0);
+});
+
 test("appearance settings update preview without a renderer request", async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.removeItem("znote:preferences");

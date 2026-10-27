@@ -51,7 +51,7 @@ export class PreviewSurface {
   private readingPosition?: { element: HTMLElement; fraction: number; gap: number; viewportY: number; line: number };
   private documentId?: string;
   private cursorFrame = 0;
-  private cursorTarget?: { source: string; line: number; cause: "editor" | "navigation" };
+  private cursorTarget?: { source: string; line: number; cause: "editor" | "editor-scroll" | "navigation" };
   onFindShortcut?: () => void;
   onPrintShortcut?: () => void;
 
@@ -158,8 +158,8 @@ export class PreviewSurface {
     this.layoutFrame = requestAnimationFrame(() => {
       this.layoutFrame = 0;
       if (this.intent === "preview") this.restoreReadingPosition();
-      else if (this.cursorTarget?.cause === "editor")
-        this.applySourceScroll(this.cursorTarget.source, this.cursorTarget.line);
+      else if (this.cursorTarget && this.cursorTarget.cause !== "navigation")
+        this.applySourceScroll(this.cursorTarget.source, this.cursorTarget.line, this.cursorTarget.cause === "editor-scroll");
     });
   };
 
@@ -341,7 +341,7 @@ export class PreviewSurface {
     });
   }
 
-  scrollToSource(source: string, line: number, cause: "editor" | "navigation" = "navigation") {
+  scrollToSource(source: string, line: number, cause: "editor" | "editor-scroll" | "navigation" = "navigation") {
     if (cause === "navigation") {
       this.navigationIntent();
     }
@@ -351,13 +351,13 @@ export class PreviewSurface {
       this.cursorFrame = 0;
       const target = this.cursorTarget;
       if (target) {
-        this.applySourceScroll(target.source, target.line);
+        this.applySourceScroll(target.source, target.line, target.cause === "editor-scroll");
         if (target.cause === "navigation") this.rememberReadingPosition();
       }
     });
   }
 
-  private applySourceScroll(source: string, line: number) {
+  private applySourceScroll(source: string, line: number, align = false) {
     const doc = this.frame?.contentDocument;
     const article = doc?.querySelector<HTMLElement>("article");
     if (!doc || !article) return;
@@ -376,7 +376,7 @@ export class PreviewSurface {
     const fraction = target !== anchor.element || closed ? 0
       : Math.max(0, Math.min(1, (line - anchor.line) / Math.max(1, (anchor.endLine ?? anchor.line) - anchor.line)));
     const y = rect.top + Math.max(0, rect.height - 1) * fraction;
-    if (y >= 0 && y <= viewport) return;
+    if (!align && y >= 0 && y <= viewport) return;
     this.writeScroll(scroller.scrollTop + y - viewport * 0.28);
   }
 
