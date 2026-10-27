@@ -419,6 +419,18 @@ fn open_file(state: tauri::State<AppState>, path: String) -> Result<file_access:
     state.access.lock().unwrap().files.insert(path);
     Ok(opened)
 }
+
+// Drop paths come from the native tauri://drag-drop event only. They are
+// canonicalized here, and each successful read grants access like a picker
+// selection would.
+#[tauri::command]
+fn open_dropped_paths(state: tauri::State<AppState>, paths: Vec<String>) -> Result<open_requests::OpenResult> {
+    let paths = paths
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    Ok(open_requests::open_paths(&state, paths))
+}
 #[tauri::command]
 fn read_file(state: tauri::State<AppState>, path: String) -> Result<Document> {
     let p = authorize(&state, &path, false)?;
@@ -1178,6 +1190,7 @@ fn main() {
             choose_file,
             choose_opened_file,
             open_file,
+            open_dropped_paths,
             read_file,
             list_recent_files,
             clear_recent_files,

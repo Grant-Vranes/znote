@@ -394,6 +394,20 @@ window.addEventListener("storage", event => {
   } catch { /* Ignore invalid preferences from another window. */ }
 });
 
+function installFileDropGuard() {
+  const hasFiles = (event: DragEvent) =>
+    !!event.dataTransfer?.types && Array.from(event.dataTransfer.types).includes("Files");
+  const guard = (event: DragEvent) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    if (event.type === "dragover" && event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  };
+  for (const type of ["dragenter", "dragover", "drop"] as const) {
+    window.addEventListener(type, guard, true);
+  }
+}
+installFileDropGuard();
+
 function toast(message: string, error = false) {
   const el = document.createElement("div");
   el.className = "toast" + (error ? " error" : "");
@@ -1167,25 +1181,30 @@ function dispatchOpenedFiles(files: OpenedFile[]): Tab[] {
 async function openFile(path?: string): Promise<boolean> {
   if (!requireNative()) return false;
   try {
-    if (path && isMediaKind(classifyFile(path))) {
-      const file = await invoke<OpenedFile>("open_file", { path });
+    const file = path
+      ? await invoke<OpenedFile>("open_file", { path })
+      : await invoke<OpenedFile | null>("choose_opened_file");
+    if (file) {
       const opened = dispatchOpenedFiles([file]);
       if (!opened.length) return false;
-      await rememberRecentFile(path);
-      return true;
-    }
-    const doc = path
-      ? await invoke<DiskDocument>("read_file", { path })
-      : await invoke<DiskDocument | null>("choose_file", { filterLabel: tr("Markdown / 文本") });
-    if (doc) {
-      const file: OpenedFile = { ...doc, kind: classifyFile(doc.path), size: doc.text.length };
-      const opened = dispatchOpenedFiles([file]);
-      if (!opened.length) return false;
-      await rememberRecentFile(doc.path);
+      await rememberRecentFile(file.path);
       return true;
     }
   } catch (e) {
     fail(e);
+  }
+  return false;
+}
+async function openDroppedPaths(paths: string[]): Promise<boolean> {
+  if (!native || !Array.isArray(paths) || !paths.length) return false;
+  try {
+    const result = await invoke<{ files: OpenedFile[]; errors: string[] }>("open_dropped_paths", { paths });
+    const opened = dispatchOpenedFiles(result.files);
+    for (const file of result.files) await rememberRecentFile(file.path);
+    for (const error of result.errors) fail(error);
+    return opened.length > 0;
+  } catch (error) {
+    fail(error);
   }
   return false;
 }
@@ -1199,7 +1218,12 @@ async function rememberRecentFile(path: string) {
 async function openRecentFile(path: string) {
   if (!requireNative()) return;
   try {
-    addTab(await invoke<DiskDocument>("open_recent_file", { path }));
+    if (isMediaKind(classifyFile(path))) {
+      dispatchOpenedFiles([await invoke<OpenedFile>("open_file", { path })]);
+      return;
+    }
+    const doc = await invoke<DiskDocument>("open_recent_file", { path });
+    dispatchOpenedFiles([{ ...doc, kind: classifyFile(doc.path), size: doc.text.length }]);
   } catch (error) {
     fail(error);
   }
@@ -3114,15 +3138,15 @@ async function handleOpenTickets(tickets: OpenTicket[]) {
   for (const ticket of tickets) {
     const policy = openRequestPolicy(ticket, prefs.fileOpening, prefs.mode);
     try {
-      const result = await invoke<{ documents: DiskDocument[]; errors: string[] }>("complete_open_request", { id: ticket.id, newWindow: policy.newWindow });
-      if (result.documents.length) {
+      const result = await invoke<{ files: OpenedFile[]; errors: string[] }>("complete_open_request", { id: ticket.id, newWindow: policy.newWindow });
+      if (result.files.length) {
         // Commit the opening layout before activating any tabs or yielding to IPC.
         externalView = ticket.source === "system";
         setMode(policy.mode, !externalView);
         document.body.classList.toggle("focus-mode", policy.focus);
         $('[data-action="focus"]').setAttribute("aria-pressed", String(policy.focus));
-        for (const doc of result.documents) addTab(doc);
-        for (const doc of result.documents) await rememberRecentFile(doc.path);
+        for (const file of result.files) dispatchOpenedFiles([file]);
+        for (const file of result.files) await rememberRecentFile(file.path);
       }
       for (const error of result.errors) fail(error);
     } catch (error) { fail(error); }
@@ -3144,6 +3168,10 @@ async function start() {
   icons();
   if (native) {
     await listen("open-requests-ready", () => { if (openRequestsListening) void drainOpenRequests(); }).catch(fail);
+    await listen<{ paths?: string[] }>("tauri://drag-drop", (event) => {
+      if (!Array.isArray(event.payload?.paths)) return;
+      void openDroppedPaths(event.payload.paths);
+    }).catch(fail);
     const opening = (await invoke<OpenTicket[] | null>("pending_open_requests").catch(error => { fail(error); return []; })) ?? [];
     const restoreSession = !opening.length && prefs.fileOpening.startup === "restore";
     if (restoreSession && prefs.lastWorkspace)

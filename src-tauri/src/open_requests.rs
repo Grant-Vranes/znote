@@ -97,8 +97,32 @@ pub(crate) fn receive(app: &tauri::AppHandle, args: Vec<String>, cwd: String) {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OpenResult {
-    documents: Vec<Document>,
-    errors: Vec<String>,
+    pub(crate) files: Vec<file_access::OpenedFile>,
+    pub(crate) errors: Vec<String>,
+}
+
+// Canonicalize, read, and grant access for user-selected paths. Deduplicates by
+// canonical path so repeated selections (startup args, drops) open one tab.
+pub(crate) fn open_paths(state: &AppState, paths: Vec<PathBuf>) -> OpenResult {
+    let mut files: Vec<file_access::OpenedFile> = Vec::new();
+    let mut errors = Vec::new();
+    for path in paths {
+        let opened: Result<file_access::OpenedFile> = (|| {
+            let path = path.canonicalize().map_err(|error| error.to_string())?;
+            let opened = file_access::read_opened_file(&path)?;
+            state.access.lock().unwrap().files.insert(path);
+            Ok(opened)
+        })();
+        match opened {
+            Ok(file) => {
+                if !files.iter().any(|old| old.path == file.path) {
+                    files.push(file);
+                }
+            }
+            Err(error) => errors.push(format!("{}：{error}", path.display())),
+        }
+    }
+    OpenResult { files, errors }
 }
 
 // Paths must originate in the native launch queue. JS receives opaque IDs instead
@@ -154,38 +178,12 @@ pub(crate) fn complete_open_request(
     if new_window && !request.paths.is_empty() {
         spawn_window(&request.paths, &request.source)?;
         return Ok(OpenResult {
-            documents: vec![],
+            files: vec![],
             errors: request.errors,
         });
     }
-    let mut result = OpenResult {
-        documents: vec![],
-        errors: request.errors,
-    };
-    for path in request.paths {
-        let opened: Result<Document> = (|| {
-            let path = path.canonicalize().map_err(|error| error.to_string())?;
-            let extension = path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if !matches!(extension.as_str(), "md" | "markdown" | "txt") {
-                return Err("此文件不是 Markdown 或文本文件".into());
-            }
-            let doc = read_document(&path)?;
-            state.access.lock().unwrap().files.insert(path);
-            Ok(doc)
-        })();
-        match opened {
-            Ok(doc) => {
-                if !result.documents.iter().any(|old| old.path == doc.path) {
-                    result.documents.push(doc);
-                }
-            }
-            Err(error) => result.errors.push(format!("{}：{error}", path.display())),
-        }
-    }
+    let mut result = open_paths(&state, request.paths);
+    result.errors.splice(0..0, request.errors);
     Ok(result)
 }
 

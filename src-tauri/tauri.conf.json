@@ -19,7 +19,7 @@
         "minWidth": 480,
         "minHeight": 620,
         "decorations": true,
-        "dragDropEnabled": false,
+        "dragDropEnabled": true,
         "backgroundColor": "#f8f8f6"
       }
     ],
@@ -43,6 +43,12 @@
       "../build/desktop-resources/excalidraw/": "excalidraw/"
     },
     "shortDescription": "本地 Markdown 编辑与阅览",
-    "category": "Productivity"
+    "category": "Productivity",
+    "fileAssociations": [
+      { "name": "Znote Markdown", "ext": ["md", "markdown", "mdx", "txt"], "description": "Markdown 或文本文件" },
+      { "name": "Znote HTML", "ext": ["html", "htm"], "description": "HTML 文件" },
+      { "name": "Znote Diagram", "ext": ["drawio", "excalidraw"], "description": "Draw.io / Excalidraw 白板" },
+      { "name": "Znote Media", "ext": ["pdf", "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif"], "description": "PDF 或图片文件" }
+    ]
   }
 }

@@ -213,15 +213,15 @@
 - All entry paths deliver `OpenedFile[]` to `dispatchOpenedFiles`: open dialog, tree click, recent item, startup/system association, and Tauri drag/drop event.
 - Tauri drag/drop is enabled and sends dropped paths only from the native `tauri://drag-drop` event to `open_dropped_paths(paths: Vec<String>)`; that command canonicalizes the paths, grants access for those user-selected files, and returns typed open results.
 
-- [ ] **Step 1: Add failing integration tests** for picker/all-files label, file tree, recent files, multiple startup paths, drop-open, duplicates, and error handling per file kind.
-- [ ] **Step 2: Run `npx playwright test tests/file-open-support.spec.ts`** and confirm missing entry flows fail.
-- [ ] **Step 3: Update frontend open entry points and Rust startup queue** to return typed open records; keep new-window routing and existing startup reveal behavior unchanged.
-- [ ] **Step 4: Add supported extension file associations** to the shared Tauri bundle configuration and Windows installer script; test each declared extension maps to the Znote executable.
-- [ ] **Step 5: Route Tauri `tauri://drag-drop` event paths to `open_dropped_paths(paths: Vec<String>)`** and verify dropped paths are canonicalized and authorized before any file read.
-- [ ] **Step 6: Run integration tests** for open dialog, tree, recent files, startup, association, and drop paths.
-- [ ] **Step 7: Update file icons, recent labels, title/status text, save keyboard shortcut, save-as defaults, and close/reopen flow for non-Markdown types.** Ensure read-only media cannot invoke editable operations.
-- [ ] **Step 8: Run all new type/file/media/HTML/diagram Playwright tests and existing file-opening, directory, startup, save, and app-sync tests.**
-- [ ] **Step 9: Commit** `feat: integrate typed file opening across desktop`.
+- [x] **Step 1: Add failing integration tests** for picker/all-files label, file tree, recent files, multiple startup paths, drop-open, duplicates, and error handling per file kind.
+- [x] **Step 2: Run `npx playwright test tests/file-open-support.spec.ts`** and confirm missing entry flows fail.
+- [x] **Step 3: Update frontend open entry points and Rust startup queue** to return typed open records; keep new-window routing and existing startup reveal behavior unchanged.
+- [x] **Step 4: Add supported extension file associations** to the shared Tauri bundle configuration and Windows installer script; test each declared extension maps to the Znote executable.
+- [x] **Step 5: Route Tauri `tauri://drag-drop` event paths to `open_dropped_paths(paths: Vec<String>)`** and verify dropped paths are canonicalized and authorized before any file read.
+- [x] **Step 6: Run integration tests** for open dialog, tree, recent files, startup, association, and drop paths.
+- [x] **Step 7: Update file icons, recent labels, title/status text, save keyboard shortcut, save-as defaults, and close/reopen flow for non-Markdown types.** Ensure read-only media cannot invoke editable operations.
+- [x] **Step 8: Run all new type/file/media/HTML/diagram Playwright tests and existing file-opening, directory, startup, save, and app-sync tests.**
+- [x] **Step 9: Commit** `feat: integrate typed file opening across desktop`.
 
 ## Task 8: Package and final verification
 
