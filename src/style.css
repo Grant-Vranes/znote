@@ -1347,6 +1347,50 @@ kbd {
   text-align: center;
 }
 .media-error[hidden] { display: none; }
+.html-viewer {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--paper);
+}
+.html-view-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.html-view-toolbar button {
+  min-width: 56px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--text);
+}
+.html-view-toolbar button[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.html-view-status { color: var(--warning); font-size: 12px; }
+.html-render-stage,
+.html-source-stage {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.html-render-stage[hidden],
+.html-source-stage[hidden] { display: none; }
+.html-document {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: white;
+}
 .writing-area[data-mode="source"] #preview-panel {
   display: none;
 }

@@ -78,7 +78,8 @@ import { initializeIcons } from "./ui-icons";
 import { NoteEditor } from "./editor";
 import { CodeEditor } from "./code-editor";
 import { MediaViewer } from "./media-viewer";
-import { classifyFile, isMediaKind } from "./file-types";
+import { HtmlViewer, defaultHtmlMode } from "./html-viewer";
+import { classifyFile, defaultFileView, isMediaKind } from "./file-types";
 import { DocumentText } from "./document-text";
 import { applyEditorTransaction, selectionInFrontMatter } from "./editor-commands";
 import { captureEditorSelection, restoreEditorSelection } from "./editor-commands";
@@ -208,6 +209,7 @@ interface Tab {
   editor?: NoteEditor;
   codeEditor?: CodeEditor;
   mediaViewer?: MediaViewer;
+  htmlViewer?: HtmlViewer;
   host?: HTMLElement;
   saving?: boolean;
 }
@@ -559,6 +561,7 @@ function applyPrefs() {
   for (const tab of tabs) {
     tab.editor?.setColorMode(colorMode);
     tab.codeEditor?.setColorMode(colorMode);
+    tab.htmlViewer?.setColorMode(colorMode);
   }
   document
     .querySelectorAll<HTMLElement>(".znote-render-scope")
@@ -877,7 +880,7 @@ function status(updateCursor = true) {
   updateWordCount(tab);
   $("#profile-status").textContent = tab.kind === "markdown"
     ? `Markdown · ${tab.plan?.math.engine ?? prefs.render.math.engine}`
-    : tab.kind === "code" ? `Code · ${tab.name}` : `${tab.kind === "pdf" ? "PDF" : tab.kind === "image" ? tr("图片") : tab.kind} · ${tab.name}`;
+    : tab.kind === "code" ? `Code · ${tab.name}` : tab.kind === "html" ? `HTML · ${tab.name}` : `${tab.kind === "pdf" ? "PDF" : tab.kind === "image" ? tr("图片") : tab.kind} · ${tab.name}`;
   if (updateCursor) cursorStatus();
   $("#encoding").textContent = isMediaKind(tab.kind) ? "" : tab.bom ? "UTF-8 BOM" : "UTF-8";
   $("#eol").textContent = isMediaKind(tab.kind) ? "" : tab.eol;
@@ -909,7 +912,7 @@ function cursorStatus() {
   if (!current()) { $("#cursor-position").textContent = ""; return; }
   const tab = current();
   if (tab && isMediaKind(tab.kind)) { $("#cursor-position").textContent = ""; return; }
-  const state = tab?.editor?.view.state ?? tab?.codeEditor?.view.state;
+  const state = tab?.editor?.view.state ?? tab?.codeEditor?.view.state ?? tab?.htmlViewer?.view?.state;
   const pos = state?.selection.main.head || 0;
   const line = state?.doc.lineAt(pos);
   const range = state?.selection.main;
@@ -946,7 +949,7 @@ function handleTabTextChange(tab: Tab, update: () => void) {
     saveTimer = setTimeout(() => void save(tab, false, true), 1400);
 }
 function mountTab(tab: Tab) {
-  if (tab.editor || tab.codeEditor || tab.mediaViewer) return;
+  if (tab.editor || tab.codeEditor || tab.mediaViewer || tab.htmlViewer) return;
   tab.host = document.createElement("div");
   tab.host.className = "tab-editor";
   $("#editor-stage").append(tab.host);
@@ -963,6 +966,18 @@ function mountTab(tab: Tab) {
           if (destination) toast(tr("已另存为 {0}", [displayPath(destination)]));
         } catch (error) { fail(error); }
       },
+    });
+    return;
+  }
+  if (tab.kind === "html") {
+    tab.htmlViewer = new HtmlViewer(tab.host, {
+      path: tab.path!,
+      source: tab.text,
+      initialMode: defaultFileView("html", tab.text.length) === "editor" ? "source" : "rendered",
+      onModeChange: () => { if (tab.id === activeId) cursorStatus(); },
+      onSourceChange: (text) => handleTabTextChange(tab, () => { tab.source.text = text; }),
+      onCursor: () => { if (tab.id === activeId) cursorStatus(); },
+      save: () => save(tab),
     });
     return;
   }
@@ -1101,7 +1116,7 @@ function showStartPage() {
 }
 async function openSidebarFile(path: string): Promise<boolean> {
   const kind = classifyFile(path);
-  if (kind === "markdown" || kind === "code" || isMediaKind(kind)) return openFile(path);
+  if (kind === "markdown" || kind === "code" || kind === "html" || isMediaKind(kind)) return openFile(path);
   if (!requireNative()) return false;
   try {
     await invoke("reveal_entry", { path });
@@ -1115,7 +1130,7 @@ function dispatchOpenedFiles(files: OpenedFile[]): Tab[] {
       opened.push(addTab(file));
       continue;
     }
-    if (file.kind !== "markdown" && file.kind !== "code") {
+    if (file.kind !== "markdown" && file.kind !== "code" && file.kind !== "html") {
       toast(tr("此文件类型的编辑器尚未加载。"), true);
       continue;
     }
@@ -1371,7 +1386,7 @@ async function fileAction(action: FileAction, target: FileTarget) {
       await invoke("trash_entry", { path: target.path });
       for (const tab of [...tabs]) if (isWithin(tab.path, target.path)) {
         if (tab.dirty) { tab.path = undefined; tab.base = ""; tab.hash = ""; tab.conflict = false; tab.plan = undefined; tab.name = tr("{0}（保留草稿）", [tab.name]); }
-        else { tab.editor?.destroy(); tab.codeEditor?.destroy(); tab.mediaViewer?.destroy(); tab.host?.remove(); tabs = tabs.filter(item => item !== tab); }
+        else { tab.editor?.destroy(); tab.codeEditor?.destroy(); tab.mediaViewer?.destroy(); tab.htmlViewer?.destroy(); tab.host?.remove(); tabs = tabs.filter(item => item !== tab); }
       }
       closedFiles = closedFiles.filter(path => !isWithin(path, target.path));
       startRecentFiles = startRecentFiles.filter(path => !isWithin(path, target.path));
@@ -1416,6 +1431,7 @@ async function save(
   if (tab.saving) return false;
   if (!as && tab.path && !tab.dirty) return true;
   if (tab.codeEditor) tab.text = tab.codeEditor.flush();
+  if (tab.htmlViewer) tab.text = tab.htmlViewer.flush();
   const snapshot = tab.text;
   tab.saving = true;
   status();
@@ -1439,7 +1455,11 @@ async function save(
     if (!doc) return false;
     const previousPath = tab.path;
     tab.path = doc.path;
-    if (previousPath !== doc.path) { await rememberRecentFile(doc.path); void syncDocumentDirectory(); }
+    if (previousPath !== doc.path) {
+      tab.htmlViewer?.setPath(doc.path);
+      await rememberRecentFile(doc.path);
+      void syncDocumentDirectory();
+    }
     tab.name = doc.path.split(/[\\/]/).pop()!;
     tab.hash = doc.hash;
     tab.bom = doc.bom;
@@ -1490,9 +1510,11 @@ async function showExternal() {
       if (!result) return;
       tab.editor?.destroy();
       tab.codeEditor?.destroy();
+      tab.htmlViewer?.destroy();
       tab.host?.remove();
       tab.editor = undefined;
       tab.codeEditor = undefined;
+      tab.htmlViewer = undefined;
       tab.text = doc.text.replace(/\r\n/g, "\n");
       tab.revision++;
       tab.base = tab.text;
@@ -1530,6 +1552,7 @@ async function closeTab(id: string) {
   tab.editor?.destroy();
   tab.codeEditor?.destroy();
   tab.mediaViewer?.destroy();
+  tab.htmlViewer?.destroy();
   tab.host?.remove();
   tabs = tabs.filter((t) => t.id !== id);
   if (!tabs.length) {
@@ -1612,9 +1635,11 @@ async function restoreDrafts() {
         if (item.dirty) {
           tab.editor?.destroy();
           tab.codeEditor?.destroy();
+          tab.htmlViewer?.destroy();
           tab.host?.remove();
           tab.editor = undefined;
           tab.codeEditor = undefined;
+          tab.htmlViewer = undefined;
           tab.text = item.text;
           tab.revision++;
           tab.base = item.base;
@@ -2737,7 +2762,7 @@ const actions: Record<string, () => unknown> = {
     if (!tab) return;
     if (tab.kind === "markdown" && mode === "read") openPreviewFind();
     else {
-      const view = tab.editor?.view ?? tab.codeEditor?.view;
+      const view = tab.editor?.view ?? tab.codeEditor?.view ?? tab.htmlViewer?.view;
       if (view) openEditorSearchPanel(view);
     }
   },
@@ -2745,7 +2770,7 @@ const actions: Record<string, () => unknown> = {
     const tab = current();
     if (!tab) return;
     if (tab.kind === "markdown" && mode === "read") setMode("source");
-    const view = tab.editor?.view ?? tab.codeEditor?.view;
+    const view = tab.editor?.view ?? tab.codeEditor?.view ?? tab.htmlViewer?.view;
     if (view) openEditorSearchPanel(view);
   },
 };
@@ -2847,6 +2872,7 @@ document.addEventListener("click", (e) => {
     }
     if (mode !== "read") {
       if (tab?.kind === "code") tab.codeEditor?.jump(position);
+      else if (tab?.kind === "html") tab.htmlViewer?.view?.dispatch({ selection: { anchor: position }, scrollIntoView: true });
       else tab?.editor?.jump(position);
     }
     return;
@@ -2991,12 +3017,14 @@ async function checkDisk() {
         if (tab.id === activeId) showConflict();
         return;
       }
-      const position = tab.editor?.view.state.selection.main.head || tab.codeEditor?.view.state.selection.main.head || 0;
+      const position = tab.editor?.view.state.selection.main.head || tab.codeEditor?.view.state.selection.main.head || tab.htmlViewer?.view?.state.selection.main.head || 0;
       tab.editor?.destroy();
       tab.codeEditor?.destroy();
+      tab.htmlViewer?.destroy();
       tab.host?.remove();
       tab.editor = undefined;
       tab.codeEditor = undefined;
+      tab.htmlViewer = undefined;
       tab.text = doc.text.replace(/\r\n/g, "\n");
       tab.revision++;
       tab.base = tab.text;

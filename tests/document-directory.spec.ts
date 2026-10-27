@@ -7,7 +7,7 @@ test.beforeEach(async ({ page }) => {
     app.calls = [];
     const doc = (path: string) => ({ path, text: "# " + path, hash: "same", bom: false, eol: "LF" });
     const entry = (path: string, directory = false) => ({ path, name: path.split("/").pop(), directory, children: [] });
-    const tree = (root: string) => ({ root, name: root.split("/").pop(), truncated: false, entries: root === "D:/work" ? [entry(root + "/work.md")] : root.endsWith("assets") ? [entry(root + "/picture.png")] : [entry(root + "/a.md"), entry(root + "/b.md"), entry(root + "/script.py"), entry(root + "/assets", true), entry(root + "/manual.pdf")] });
+    const tree = (root: string) => ({ root, name: root.split("/").pop(), truncated: false, entries: root === "D:/work" ? [entry(root + "/work.md")] : root.endsWith("assets") ? [entry(root + "/picture.png")] : [entry(root + "/a.md"), entry(root + "/b.md"), entry(root + "/script.py"), entry(root + "/page.html"), entry(root + "/assets", true), entry(root + "/manual.pdf")] });
     localStorage.setItem("znote:preferences", JSON.stringify({ fileOpening: { startup: "home", mode: "source", focus: false, target: "current" } }));
     let initial = true;
     app.nextFile = "D:/other/a.md";
@@ -113,6 +113,20 @@ test("closing a dirty code tab uses the shared save-or-discard prompt", async ({
   await page.getByRole("button", { name: "放弃更改", exact: true }).click();
   await expect(page.locator("#tabs .tab")).toHaveCount(1);
   await expect(page.locator(".tab-editor:not([hidden]) .cm-editor[data-language='Python']")).toHaveCount(0);
+});
+
+test("HTML files open in the sandboxed render/source viewer and save before rerender", async ({ page }) => {
+  await page.locator('[data-file="D:/single/page.html"]').click();
+  await expect(page.locator("#tabs .tab")).toHaveCount(2);
+  await expect(page.locator(".writing-area")).toHaveAttribute("data-file-kind", "html");
+  const frame = page.locator("iframe.html-document");
+  await expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-popups allow-forms");
+  await expect(frame).not.toHaveAttribute("sandbox", /allow-same-origin/);
+  await page.getByRole("button", { name: "源码" }).click();
+  await page.locator(".tab-editor:not([hidden]) .cm-content").fill("<h1>changed HTML</h1>");
+  await page.getByRole("button", { name: "渲染", exact: true }).click();
+  await expect(page.locator("iframe.html-document")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.findLast((call: any) => call.command === "save_file")?.args.data.text)).toBe("<h1>changed HTML</h1>");
 });
 
 test("PDF files open in a read-only media tab instead of the external viewer", async ({ page }) => {
