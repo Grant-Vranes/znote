@@ -3,7 +3,9 @@
     "targets": ["nsis"],
     "resources": {
       "icons/markdown.ico": "icons/markdown.ico",
-      "../build/renderer-dist/znote-renderer/": "bin/znote-renderer/"
+      "../build/renderer-dist/znote-renderer/": "bin/znote-renderer/",
+      "../build/desktop-resources/drawio/draw.war": "drawio/draw.war",
+      "../build/desktop-resources/excalidraw/": "excalidraw/"
     },
     "windows": {
       "nsis": {

@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' data: local-html: http://local-html.localhost; img-src 'self' data: blob: https: local-media: local-html: http://local-media.localhost http://local-html.localhost; font-src 'self' data: local-html: http://local-html.localhost; media-src 'self' blob: local-media: local-html: http://local-media.localhost http://local-html.localhost; connect-src ipc: http://ipc.localhost https://api.iconify.design local-html: local-media: http://local-html.localhost http://local-media.localhost; frame-src 'self' blob: local-html: local-media: http://local-html.localhost http://local-media.localhost; object-src 'none'; base-uri 'self'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' data: local-html: drawio-local: excalidraw-local: http://local-html.localhost http://drawio-local.localhost http://excalidraw-local.localhost; img-src 'self' data: blob: https: local-media: local-html: drawio-local: excalidraw-local: http://local-media.localhost http://local-html.localhost http://drawio-local.localhost http://excalidraw-local.localhost; font-src 'self' data: local-html: drawio-local: excalidraw-local: http://local-html.localhost http://drawio-local.localhost http://excalidraw-local.localhost; media-src 'self' blob: local-media: local-html: drawio-local: excalidraw-local: http://local-media.localhost http://local-html.localhost http://drawio-local.localhost http://excalidraw-local.localhost; connect-src ipc: http://ipc.localhost https://api.iconify.design local-html: local-media: drawio-local: excalidraw-local: http://local-html.localhost http://local-media.localhost http://drawio-local.localhost http://excalidraw-local.localhost; frame-src 'self' blob: local-html: local-media: drawio-local: excalidraw-local: http://local-html.localhost http://local-media.localhost http://drawio-local.localhost http://excalidraw-local.localhost; object-src 'none'; base-uri 'self'"
     }
   },
   "bundle": {
@@ -38,7 +38,9 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../build/renderer-dist/znote-renderer/": "bin/znote-renderer/"
+      "../build/renderer-dist/znote-renderer/": "bin/znote-renderer/",
+      "../build/desktop-resources/drawio/draw.war": "drawio/draw.war",
+      "../build/desktop-resources/excalidraw/": "excalidraw/"
     },
     "shortDescription": "本地 Markdown 编辑与阅览",
     "category": "Productivity"

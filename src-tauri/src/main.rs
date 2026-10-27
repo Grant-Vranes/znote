@@ -34,6 +34,8 @@ struct AppState {
     data: PathBuf,
     renderer: PathBuf,
     renderer_args: Vec<PathBuf>,
+    drawio_archive: PathBuf,
+    excalidraw_dir: PathBuf,
     recovery: recovery::Recovery,
 }
 struct Worker {
@@ -620,6 +622,35 @@ fn save_media_as(state: tauri::State<AppState>, path: String) -> Result<Option<S
 }
 
 #[tauri::command]
+fn save_diagram_export(name: String, format: String, bytes: Vec<u8>) -> Result<Option<String>> {
+    let (extension, _) = file_access::validate_diagram_export(&format, bytes.len())?;
+    file_operations::valid_name(&name)?;
+    let name = if name.to_ascii_lowercase().ends_with(&format!(".{extension}")) {
+        name
+    } else {
+        format!("{name}.{extension}")
+    };
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter(if extension == "png" { "PNG image" } else { "SVG image" }, &[extension])
+        .set_file_name(&name)
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    let path = if path.exists() {
+        path.canonicalize().map_err(|error| error.to_string())?
+    } else {
+        path.parent()
+            .ok_or("导出位置缺少父目录")?
+            .canonicalize()
+            .map_err(|error| error.to_string())?
+            .join(path.file_name().ok_or("导出文件名无效")?)
+    };
+    atomic_write(&path, &bytes)?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
 fn create_note(
     state: tauri::State<AppState>,
     name: String,
@@ -816,6 +847,9 @@ fn local_resource_response(
     response.body(body).expect("valid local resource response")
 }
 
+const DRAWIO_CSP: &str = "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:; style-src 'self' 'unsafe-inline' data:; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'none'";
+const EXCALIDRAW_CSP: &str = "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' blob: data:; style-src 'self' 'unsafe-inline' data:; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'none'";
+
 fn resource_error(message: &str) -> tauri::http::Response<Vec<u8>> {
     local_resource_response(
         tauri::http::StatusCode::FORBIDDEN,
@@ -863,6 +897,54 @@ fn serve_media_resource(
         content_type,
         kind == file_access::ResourceKind::Image,
     ))
+}
+
+fn serve_drawio_resource(app: &tauri::AppHandle, uri_path: &str) -> Result<(Vec<u8>, &'static str)> {
+    let state = app.state::<AppState>();
+    file_access::read_drawio_asset(&state.drawio_archive, uri_path)
+}
+
+fn serve_excalidraw_resource(app: &tauri::AppHandle, uri_path: &str) -> Result<(Vec<u8>, &'static str)> {
+    let relative = file_access::decode_uri_path(uri_path.trim_start_matches('/'))?;
+    let relative = if relative.is_empty() { "index.html" } else { &relative };
+    let relative_path = Path::new(relative);
+    if relative.contains('\\')
+        || relative.contains(':')
+        || relative_path.is_absolute()
+        || relative_path.components().any(|part| matches!(
+            part,
+            std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(_)
+        ))
+    {
+        return Err("Excalidraw 资源路径无效".into());
+    }
+    let state = app.state::<AppState>();
+    let root = state.excalidraw_dir.canonicalize().map_err(|error| error.to_string())?;
+    let path = root.join(relative_path).canonicalize().map_err(|error| error.to_string())?;
+    if !path.is_file() || !path.starts_with(&root) {
+        return Err("Excalidraw 资源不存在".into());
+    }
+    let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
+    if metadata.len() > 64 * 1024 * 1024 {
+        return Err("Excalidraw 资源过大".into());
+    }
+    let mime = file_access::mime_type(&path).unwrap_or("application/octet-stream");
+    Ok((fs::read(path).map_err(|error| error.to_string())?, mime))
+}
+
+fn diagram_resource_response(
+    mime: &str,
+    body: Vec<u8>,
+    policy: &'static str,
+) -> tauri::http::Response<Vec<u8>> {
+    let mut response = local_resource_response(tauri::http::StatusCode::OK, mime, body, false);
+    if mime.starts_with("text/html") {
+        response.headers_mut().insert(
+            tauri::http::header::CONTENT_SECURITY_POLICY,
+            tauri::http::HeaderValue::from_static(policy),
+        );
+    }
+    response
 }
 
 fn serve_html_resource(app: &tauri::AppHandle, uri_path: &str) -> Result<(Vec<u8>, &'static str)> {
@@ -967,6 +1049,46 @@ fn main() {
                 Err(message) => responder.respond(resource_error(&message)),
             });
         })
+        .register_asynchronous_uri_scheme_protocol("drawio-local", |context, request, responder| {
+            let app = context.app_handle().clone();
+            let path = request.uri().path().to_owned();
+            std::thread::spawn(move || match serve_drawio_resource(&app, &path) {
+                Ok((bytes, mime)) => responder.respond(diagram_resource_response(
+                    mime,
+                    bytes,
+                    "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:; style-src 'self' 'unsafe-inline' data:; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'none'",
+                )),
+                Err(message) => responder.respond(resource_error(&message)),
+            });
+        })
+        .register_asynchronous_uri_scheme_protocol("excalidraw-local", |context, request, responder| {
+            let app = context.app_handle().clone();
+            let path = request.uri().path().to_owned();
+            std::thread::spawn(move || match serve_excalidraw_resource(&app, &path) {
+                Ok((bytes, mime)) => responder.respond(diagram_resource_response(
+                    mime,
+                    bytes,
+                    "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' blob: data:; style-src 'self' 'unsafe-inline' data:; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'none'",
+                )),
+                Err(message) => responder.respond(resource_error(&message)),
+            });
+        })
+        .register_asynchronous_uri_scheme_protocol("drawio-local", |context, request, responder| {
+            let app = context.app_handle().clone();
+            let path = request.uri().path().to_owned();
+            std::thread::spawn(move || match serve_drawio_resource(&app, &path) {
+                Ok((bytes, mime)) => responder.respond(diagram_resource_response(mime, bytes, DRAWIO_CSP)),
+                Err(message) => responder.respond(resource_error(&message)),
+            });
+        })
+        .register_asynchronous_uri_scheme_protocol("excalidraw-local", |context, request, responder| {
+            let app = context.app_handle().clone();
+            let path = request.uri().path().to_owned();
+            std::thread::spawn(move || match serve_excalidraw_resource(&app, &path) {
+                Ok((bytes, mime)) => responder.respond(diagram_resource_response(mime, bytes, EXCALIDRAW_CSP)),
+                Err(message) => responder.respond(resource_error(&message)),
+            });
+        })
         .register_asynchronous_uri_scheme_protocol("local-html", |context, request, responder| {
             let app = context.app_handle().clone();
             let path = request.uri().path().to_owned();
@@ -1020,6 +1142,13 @@ fn main() {
             } else {
                 (bundled, bundled_args)
             };
+            let editor_assets = if cfg!(dev) {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build/desktop-resources")
+            } else {
+                app.path().resource_dir()?
+            };
+            let drawio_archive = editor_assets.join("drawio/draw.war");
+            let excalidraw_dir = editor_assets.join("excalidraw");
             let recovery = recovery::Recovery::new(&data)?;
             app.manage(AppState {
                 access: Mutex::new(Access::default()),
@@ -1030,6 +1159,8 @@ fn main() {
                 data,
                 renderer,
                 renderer_args,
+                drawio_archive,
+                excalidraw_dir,
                 recovery,
             });
             Ok(())
@@ -1058,6 +1189,7 @@ fn main() {
             save_file,
             save_as,
             save_media_as,
+            save_diagram_export,
             create_note,
             file_operations::create_folder,
             file_operations::rename_entry,

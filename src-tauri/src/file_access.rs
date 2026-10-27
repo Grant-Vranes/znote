@@ -71,6 +71,20 @@ pub(crate) fn classify_path(path: &Path) -> FileKind {
     }
 }
 
+pub(crate) fn validate_diagram_export(
+    format: &str,
+    size: usize,
+) -> Result<(&'static str, &'static str)> {
+    if size == 0 || size > 100 * 1024 * 1024 {
+        return Err("图表导出为空或超过 100 MB。".into());
+    }
+    match format {
+        "png" => Ok(("png", "image/png")),
+        "svg" => Ok(("svg", "image/svg+xml")),
+        _ => Err("仅支持 PNG 和 SVG 图表导出。".into()),
+    }
+}
+
 pub(crate) fn copy_media_file(source: &Path, destination: &Path) -> Result<()> {
     let source = source.canonicalize().map_err(|error| error.to_string())?;
     let kind = match classify_path(&source) {
@@ -183,6 +197,51 @@ pub(crate) fn read_opened_file(path: &Path) -> Result<OpenedFile> {
     })
 }
 
+pub(crate) fn read_drawio_asset(
+    archive_path: &Path,
+    requested: &str,
+) -> Result<(Vec<u8>, &'static str)> {
+    use std::io::Read;
+    let decoded = decode_uri_path(requested)?;
+    let relative = decoded.trim_start_matches('/');
+    let relative = if relative.is_empty() {
+        "index.html"
+    } else {
+        relative
+    };
+    let path = Path::new(relative);
+    if path.is_absolute()
+        || relative.contains('\\')
+        || relative.contains(':')
+        || path.components().any(|part| {
+            matches!(
+                part,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+        || relative.starts_with("WEB-INF/")
+        || relative.starts_with("META-INF/")
+    {
+        return Err("Draw.io 资源路径无效".into());
+    }
+    let file = fs::File::open(archive_path).map_err(|error| error.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
+    let mut entry = archive
+        .by_name(relative)
+        .map_err(|_| "Draw.io 资源不存在")?;
+    if entry.is_dir() || entry.size() > 128 * 1024 * 1024 {
+        return Err("Draw.io 资源无效或过大".into());
+    }
+    let content_type = mime_type(path).unwrap_or("application/octet-stream");
+    let mut bytes = Vec::with_capacity(entry.size() as usize);
+    entry
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    Ok((bytes, content_type))
+}
+
 pub(crate) fn decode_path_token(value: &str) -> Result<String> {
     let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(value)
@@ -223,6 +282,7 @@ pub(crate) fn mime_type(path: &Path) -> Option<&'static str> {
         "js" | "mjs" => Some("text/javascript; charset=utf-8"),
         "json" | "map" => Some("application/json"),
         "xml" => Some("application/xml"),
+        "txt" | "md" | "properties" | "mf" => Some("text/plain; charset=utf-8"),
         "pdf" => Some("application/pdf"),
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),
@@ -403,6 +463,46 @@ mod tests {
         assert_eq!(super::decode_uri_path("a+b.css").unwrap(), "a+b.css");
         assert!(super::decode_uri_path("bad%2").is_err());
         assert!(super::decode_uri_path("%FF").is_err());
+    }
+
+    #[test]
+    fn serves_only_safe_drawio_archive_entries_with_content_types() {
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, ZipWriter};
+
+        let dir = tempdir().unwrap();
+        let archive_path = dir.path().join("draw.war");
+        let mut archive = ZipWriter::new(fs::File::create(&archive_path).unwrap());
+        archive
+            .start_file("index.html", SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(b"<html>offline</html>").unwrap();
+        archive
+            .start_file("WEB-INF/web.xml", SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(b"server configuration").unwrap();
+        archive.finish().unwrap();
+
+        let (html, mime) = super::read_drawio_asset(&archive_path, "/index.html").unwrap();
+        assert_eq!(String::from_utf8(html).unwrap(), "<html>offline</html>");
+        assert_eq!(mime, "text/html; charset=utf-8");
+        assert!(super::read_drawio_asset(&archive_path, "/../secret.txt").is_err());
+        assert!(super::read_drawio_asset(&archive_path, "/WEB-INF/web.xml").is_err());
+    }
+
+    #[test]
+    fn allows_only_bounded_png_and_svg_diagram_exports() {
+        assert_eq!(
+            super::validate_diagram_export("png", 1).unwrap(),
+            ("png", "image/png")
+        );
+        assert_eq!(
+            super::validate_diagram_export("svg", 1).unwrap(),
+            ("svg", "image/svg+xml")
+        );
+        assert!(super::validate_diagram_export("html", 1).is_err());
+        assert!(super::validate_diagram_export("png", 0).is_err());
+        assert!(super::validate_diagram_export("png", 100 * 1024 * 1024 + 1).is_err());
     }
 
     #[test]

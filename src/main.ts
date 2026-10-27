@@ -79,6 +79,8 @@ import { NoteEditor } from "./editor";
 import { CodeEditor } from "./code-editor";
 import { MediaViewer } from "./media-viewer";
 import { HtmlViewer, defaultHtmlMode } from "./html-viewer";
+import { DrawioEditor } from "./drawio-editor";
+import { ExcalidrawEditor } from "./excalidraw-editor";
 import { classifyFile, defaultFileView, isMediaKind } from "./file-types";
 import { DocumentText } from "./document-text";
 import { applyEditorTransaction, selectionInFrontMatter } from "./editor-commands";
@@ -210,6 +212,8 @@ interface Tab {
   codeEditor?: CodeEditor;
   mediaViewer?: MediaViewer;
   htmlViewer?: HtmlViewer;
+  drawioEditor?: DrawioEditor;
+  excalidrawEditor?: ExcalidrawEditor;
   host?: HTMLElement;
   saving?: boolean;
 }
@@ -832,7 +836,7 @@ function renderTabs() {
   const markup = tabs
     .map(
       (t) =>
-        `<div class="tab ${t.id === activeId ? "active" : ""}" role="tab" aria-selected="${t.id === activeId}" data-tab="${t.id}">${icon(t.kind === "image" ? "image" : t.kind === "pdf" ? "file" : t.kind === "code" ? "code-2" : "file-text")}<span>${escapeHtml(t.name)}</span>${t.dirty ? '<span class="dirty-dot"></span>' : ""}<button class="tab-close" title="${tr("关闭笔记")}" data-close="${t.id}">${icon("x")}</button></div>`,
+        `<div class="tab ${t.id === activeId ? "active" : ""}" role="tab" aria-selected="${t.id === activeId}" data-tab="${t.id}">${icon(t.kind === "image" ? "image" : t.kind === "pdf" ? "file" : t.kind === "code" ? "code-2" : t.kind === "drawio" ? "workflow" : t.kind === "excalidraw" ? "sticky-note" : "file-text")}<span>${escapeHtml(t.name)}</span>${t.dirty ? '<span class="dirty-dot"></span>' : ""}<button class="tab-close" title="${tr("关闭笔记")}" data-close="${t.id}">${icon("x")}</button></div>`,
     )
     .join("");
   if (markup === tabsMarkup) return;
@@ -847,7 +851,7 @@ function updateWordCount(tab: Tab) {
   clearTimeout(wordCountTimer);
   const render = () => {
     if (current() !== tab) return;
-    if (isMediaKind(tab.kind)) {
+    if (isMediaKind(tab.kind) || tab.kind === "drawio" || tab.kind === "excalidraw") {
       $("#word-count").textContent = "";
       $("#word-count").removeAttribute("aria-busy");
       return;
@@ -880,7 +884,11 @@ function status(updateCursor = true) {
   updateWordCount(tab);
   $("#profile-status").textContent = tab.kind === "markdown"
     ? `Markdown · ${tab.plan?.math.engine ?? prefs.render.math.engine}`
-    : tab.kind === "code" ? `Code · ${tab.name}` : tab.kind === "html" ? `HTML · ${tab.name}` : `${tab.kind === "pdf" ? "PDF" : tab.kind === "image" ? tr("图片") : tab.kind} · ${tab.name}`;
+    : tab.kind === "code" ? `Code · ${tab.name}`
+    : tab.kind === "html" ? `HTML · ${tab.name}`
+    : tab.kind === "drawio" ? `Draw.io · ${tab.name}`
+    : tab.kind === "excalidraw" ? `Excalidraw · ${tab.name}`
+    : `${tab.kind === "pdf" ? "PDF" : tab.kind === "image" ? tr("图片") : tab.kind} · ${tab.name}`;
   if (updateCursor) cursorStatus();
   $("#encoding").textContent = isMediaKind(tab.kind) ? "" : tab.bom ? "UTF-8 BOM" : "UTF-8";
   $("#eol").textContent = isMediaKind(tab.kind) ? "" : tab.eol;
@@ -911,7 +919,7 @@ function cursorStatus() {
   editorToolbar?.refresh();
   if (!current()) { $("#cursor-position").textContent = ""; return; }
   const tab = current();
-  if (tab && isMediaKind(tab.kind)) { $("#cursor-position").textContent = ""; return; }
+  if (tab && (isMediaKind(tab.kind) || tab.kind === "drawio" || tab.kind === "excalidraw")) { $("#cursor-position").textContent = ""; return; }
   const state = tab?.editor?.view.state ?? tab?.codeEditor?.view.state ?? tab?.htmlViewer?.view?.state;
   const pos = state?.selection.main.head || 0;
   const line = state?.doc.lineAt(pos);
@@ -949,7 +957,7 @@ function handleTabTextChange(tab: Tab, update: () => void) {
     saveTimer = setTimeout(() => void save(tab, false, true), 1400);
 }
 function mountTab(tab: Tab) {
-  if (tab.editor || tab.codeEditor || tab.mediaViewer || tab.htmlViewer) return;
+  if (tab.editor || tab.codeEditor || tab.mediaViewer || tab.htmlViewer || tab.drawioEditor || tab.excalidrawEditor) return;
   tab.host = document.createElement("div");
   tab.host.className = "tab-editor";
   $("#editor-stage").append(tab.host);
@@ -978,6 +986,20 @@ function mountTab(tab: Tab) {
       onSourceChange: (text) => handleTabTextChange(tab, () => { tab.source.text = text; }),
       onCursor: () => { if (tab.id === activeId) cursorStatus(); },
       save: () => save(tab),
+    });
+    return;
+  }
+  if (tab.kind === "drawio") {
+    tab.drawioEditor = new DrawioEditor(tab.host, tab.text, {
+      change: (xml) => handleTabTextChange(tab, () => { tab.source.text = xml; }),
+      export: (format, bytes) => { void saveDiagramExport(tab, format, bytes); },
+    });
+    return;
+  }
+  if (tab.kind === "excalidraw") {
+    tab.excalidrawEditor = new ExcalidrawEditor(tab.host, tab.text, {
+      change: (json) => handleTabTextChange(tab, () => { tab.source.text = json; }),
+      export: (format, bytes) => { void saveDiagramExport(tab, format, bytes); },
     });
     return;
   }
@@ -1116,7 +1138,7 @@ function showStartPage() {
 }
 async function openSidebarFile(path: string): Promise<boolean> {
   const kind = classifyFile(path);
-  if (kind === "markdown" || kind === "code" || kind === "html" || isMediaKind(kind)) return openFile(path);
+  if (kind === "markdown" || kind === "code" || kind === "html" || kind === "drawio" || kind === "excalidraw" || isMediaKind(kind)) return openFile(path);
   if (!requireNative()) return false;
   try {
     await invoke("reveal_entry", { path });
@@ -1130,7 +1152,7 @@ function dispatchOpenedFiles(files: OpenedFile[]): Tab[] {
       opened.push(addTab(file));
       continue;
     }
-    if (file.kind !== "markdown" && file.kind !== "code" && file.kind !== "html") {
+    if (!isMediaKind(file.kind) && !["markdown", "code", "html", "drawio", "excalidraw"].includes(file.kind)) {
       toast(tr("此文件类型的编辑器尚未加载。"), true);
       continue;
     }
@@ -1386,7 +1408,7 @@ async function fileAction(action: FileAction, target: FileTarget) {
       await invoke("trash_entry", { path: target.path });
       for (const tab of [...tabs]) if (isWithin(tab.path, target.path)) {
         if (tab.dirty) { tab.path = undefined; tab.base = ""; tab.hash = ""; tab.conflict = false; tab.plan = undefined; tab.name = tr("{0}（保留草稿）", [tab.name]); }
-        else { tab.editor?.destroy(); tab.codeEditor?.destroy(); tab.mediaViewer?.destroy(); tab.htmlViewer?.destroy(); tab.host?.remove(); tabs = tabs.filter(item => item !== tab); }
+        else { tab.editor?.destroy(); tab.codeEditor?.destroy(); tab.mediaViewer?.destroy(); tab.htmlViewer?.destroy(); tab.drawioEditor?.destroy(); tab.excalidrawEditor?.destroy(); tab.host?.remove(); tabs = tabs.filter(item => item !== tab); }
       }
       closedFiles = closedFiles.filter(path => !isWithin(path, target.path));
       startRecentFiles = startRecentFiles.filter(path => !isWithin(path, target.path));
@@ -1422,6 +1444,18 @@ async function newNote(parent?: string) {
     fail(e);
   }
 }
+async function saveDiagramExport(tab: Tab, format: "png" | "svg", bytes: Uint8Array) {
+  if (!requireNative()) return;
+  const stem = tab.name.replace(/\.[^.]+$/, "");
+  try {
+    const destination = await invoke<string | null>("save_diagram_export", {
+      name: `${stem}.${format}`,
+      format,
+      bytes: Array.from(bytes),
+    });
+    if (destination) toast(tr("已导出 {0}", [displayPath(destination)]));
+  } catch (error) { fail(error); }
+}
 async function save(
   tab = current(),
   as = false,
@@ -1429,9 +1463,13 @@ async function save(
 ): Promise<boolean> {
   if (!tab || isMediaKind(tab.kind) || fileOperationBusy || !requireNative()) return false;
   if (tab.saving) return false;
-  if (!as && tab.path && !tab.dirty) return true;
+  const diagramFlushRequired = !!tab.drawioEditor || !!tab.excalidrawEditor;
+  if (!as && tab.path && !tab.dirty && !diagramFlushRequired) return true;
   if (tab.codeEditor) tab.text = tab.codeEditor.flush();
   if (tab.htmlViewer) tab.text = tab.htmlViewer.flush();
+  if (tab.drawioEditor) tab.text = await tab.drawioEditor.flush();
+  if (tab.excalidrawEditor) tab.text = await tab.excalidrawEditor.flush();
+  if (!as && tab.path && !tab.dirty) return true;
   const snapshot = tab.text;
   tab.saving = true;
   status();
@@ -1465,6 +1503,8 @@ async function save(
     tab.bom = doc.bom;
     tab.eol = doc.eol;
     tab.base = snapshot;
+    tab.drawioEditor?.markSaved(snapshot);
+    tab.excalidrawEditor?.markSaved(snapshot);
     tab.dirty = tab.text !== snapshot;
     tab.conflict = false;
     renderTabs();
@@ -1511,10 +1551,14 @@ async function showExternal() {
       tab.editor?.destroy();
       tab.codeEditor?.destroy();
       tab.htmlViewer?.destroy();
+      tab.drawioEditor?.destroy();
+      tab.excalidrawEditor?.destroy();
       tab.host?.remove();
       tab.editor = undefined;
       tab.codeEditor = undefined;
       tab.htmlViewer = undefined;
+      tab.drawioEditor = undefined;
+      tab.excalidrawEditor = undefined;
       tab.text = doc.text.replace(/\r\n/g, "\n");
       tab.revision++;
       tab.base = tab.text;
@@ -1553,6 +1597,8 @@ async function closeTab(id: string) {
   tab.codeEditor?.destroy();
   tab.mediaViewer?.destroy();
   tab.htmlViewer?.destroy();
+  tab.drawioEditor?.destroy();
+  tab.excalidrawEditor?.destroy();
   tab.host?.remove();
   tabs = tabs.filter((t) => t.id !== id);
   if (!tabs.length) {
@@ -1636,10 +1682,14 @@ async function restoreDrafts() {
           tab.editor?.destroy();
           tab.codeEditor?.destroy();
           tab.htmlViewer?.destroy();
+          tab.drawioEditor?.destroy();
+          tab.excalidrawEditor?.destroy();
           tab.host?.remove();
           tab.editor = undefined;
           tab.codeEditor = undefined;
           tab.htmlViewer = undefined;
+          tab.drawioEditor = undefined;
+          tab.excalidrawEditor = undefined;
           tab.text = item.text;
           tab.revision++;
           tab.base = item.base;
@@ -3021,10 +3071,14 @@ async function checkDisk() {
       tab.editor?.destroy();
       tab.codeEditor?.destroy();
       tab.htmlViewer?.destroy();
+      tab.drawioEditor?.destroy();
+      tab.excalidrawEditor?.destroy();
       tab.host?.remove();
       tab.editor = undefined;
       tab.codeEditor = undefined;
       tab.htmlViewer = undefined;
+      tab.drawioEditor = undefined;
+      tab.excalidrawEditor = undefined;
       tab.text = doc.text.replace(/\r\n/g, "\n");
       tab.revision++;
       tab.base = tab.text;

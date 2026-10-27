@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "types": ["vite/client", "react", "react-dom"],
+    "moduleResolution": "Bundler"
+  },
+  "include": ["./main.tsx", "../../src/excalidraw-scene.ts"]
+}

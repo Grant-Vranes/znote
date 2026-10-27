@@ -7,7 +7,7 @@ test.beforeEach(async ({ page }) => {
     app.calls = [];
     const doc = (path: string) => ({ path, text: "# " + path, hash: "same", bom: false, eol: "LF" });
     const entry = (path: string, directory = false) => ({ path, name: path.split("/").pop(), directory, children: [] });
-    const tree = (root: string) => ({ root, name: root.split("/").pop(), truncated: false, entries: root === "D:/work" ? [entry(root + "/work.md")] : root.endsWith("assets") ? [entry(root + "/picture.png")] : [entry(root + "/a.md"), entry(root + "/b.md"), entry(root + "/script.py"), entry(root + "/page.html"), entry(root + "/assets", true), entry(root + "/manual.pdf")] });
+    const tree = (root: string) => ({ root, name: root.split("/").pop(), truncated: false, entries: root === "D:/work" ? [entry(root + "/work.md")] : root.endsWith("assets") ? [entry(root + "/picture.png")] : [entry(root + "/a.md"), entry(root + "/b.md"), entry(root + "/script.py"), entry(root + "/page.html"), entry(root + "/diagram.drawio"), entry(root + "/scene.excalidraw"), entry(root + "/assets", true), entry(root + "/manual.pdf")] });
     localStorage.setItem("znote:preferences", JSON.stringify({ fileOpening: { startup: "home", mode: "source", focus: false, target: "current" } }));
     let initial = true;
     app.nextFile = "D:/other/a.md";
@@ -127,6 +127,17 @@ test("HTML files open in the sandboxed render/source viewer and save before rere
   await page.getByRole("button", { name: "渲染", exact: true }).click();
   await expect(page.locator("iframe.html-document")).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as any).calls.findLast((call: any) => call.command === "save_file")?.args.data.text)).toBe("<h1>changed HTML</h1>");
+});
+
+test("Draw.io and Excalidraw files mount their locally bundled diagram frames", async ({ page }) => {
+  await page.locator('[data-file="D:/single/diagram.drawio"]').click();
+  await expect(page.locator("#tabs .tab")).toHaveCount(2);
+  await expect(page.locator("iframe.drawio-frame")).toHaveAttribute("src", /^drawio-local:\/\/localhost\//);
+  await expect(page.locator(".drawio-editor .diagram-warning")).toBeVisible();
+  await page.locator('[data-file="D:/single/scene.excalidraw"]').click();
+  await expect(page.locator("#tabs .tab")).toHaveCount(3);
+  await expect(page.locator("iframe.excalidraw-frame")).toHaveAttribute("src", /^excalidraw-local:\/\/localhost\//);
+  await expect(page.locator(".excalidraw-editor .diagram-warning")).toBeVisible();
 });
 
 test("PDF files open in a read-only media tab instead of the external viewer", async ({ page }) => {

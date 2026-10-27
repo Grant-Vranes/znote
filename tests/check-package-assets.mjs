@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 // Derive expectations from the pinned upstream manifest independently of the
 // build plugin, so a mistaken exclusion rule cannot make the check pass too.
@@ -28,4 +29,19 @@ if (fs.existsSync("public")) verify("public", "public", "", false);
 verify("tests/vendor", "tests/vendor", "licenses", true);
 const generated = fs.readdirSync("dist/assets").filter(name => /\.(css|js)$/.test(name)).map(name => fs.readFileSync(path.join("dist/assets", name), "utf8")).join("\n");
 assert(generated.includes("znote-render-scope"), "Scoped document CSS must remain in the frontend bundle");
-console.log(`Package assets verified: ${excluded.toLocaleString()} bytes of reference CSS excluded; notices retained.`);
+
+const drawioLock = JSON.parse(fs.readFileSync("resources/drawio.lock.json", "utf8"));
+const drawioArchive = "build/desktop-resources/drawio/draw.war";
+assert(fs.existsSync(drawioArchive), "Offline Draw.io archive is missing; run scripts/prepare-diagram-assets.mjs");
+const drawioBytes = fs.readFileSync(drawioArchive);
+assert.equal(drawioBytes.length, drawioLock.size, "Draw.io archive size differs from the lock file");
+assert.equal(createHash("sha256").update(drawioBytes).digest("hex"), drawioLock.sha256, "Draw.io archive checksum differs from the lock file");
+
+const excalidrawRoot = "build/desktop-resources/excalidraw";
+const excalidrawIndex = path.join(excalidrawRoot, "index.html");
+assert(fs.existsSync(excalidrawIndex), "Offline Excalidraw bundle is missing; run scripts/prepare-diagram-assets.mjs");
+const html = fs.readFileSync(excalidrawIndex, "utf8");
+for (const [, asset] of html.matchAll(/(?:src|href)="\.\/([^\"]+)"/g)) {
+  assert(fs.existsSync(path.join(excalidrawRoot, asset)), `Excalidraw bundle asset missing: ${asset}`);
+}
+console.log(`Package assets verified: ${excluded.toLocaleString()} bytes of reference CSS excluded; notices and offline diagram editors retained.`);
