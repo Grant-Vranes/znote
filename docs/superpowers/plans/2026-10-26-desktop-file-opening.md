@@ -230,13 +230,13 @@
 - Modify: `tests/check-package-assets.mjs`
 - Create: `docs/desktop-file-support.md` with supported formats and limitations
 
-- [ ] **Step 1: Add a failing package assertion** that built desktop output contains Draw.io, Excalidraw, and local viewer resources and does not depend on network fetches at runtime.
-- [ ] **Step 2: Run `node tests/check-package-assets.mjs`** and verify it identifies missing bundled resources before implementation.
-- [ ] **Step 3: Update desktop build/copy scripts** to bundle all pinned assets deterministically; fail the build with an actionable message if a required resource is absent or version/checksum mismatched.
-- [ ] **Step 4: Document supported extensions, read-only formats, source/render modes, offline diagram behavior, UTF-8/binary limits, and desktop-only scope.**
-- [ ] **Step 5: Run final verification:** `npm run check`, `npm run build`, `npm test`, `cargo test --manifest-path src-tauri/Cargo.toml`, and the desktop asset/package test. Record any environment-dependent build failures without claiming success.
-- [ ] **Step 6: Review `git diff` and `git status`** to confirm user changes remain untouched and no generated binaries or unpinned external artifacts were added unintentionally.
-- [ ] **Step 7: Commit** `test: verify desktop file type support`.
+- [x] **Step 1: Add a failing package assertion** that built desktop output contains Draw.io, Excalidraw, and local viewer resources and does not depend on network fetches at runtime.
+- [x] **Step 2: Run `node tests/check-package-assets.mjs`** and verify it identifies missing bundled resources before implementation.
+- [x] **Step 3: Update desktop build/copy scripts** to bundle all pinned assets deterministically; fail the build with an actionable message if a required resource is absent or version/checksum mismatched.
+- [x] **Step 4: Document supported extensions, read-only formats, source/render modes, offline diagram behavior, UTF-8/binary limits, and desktop-only scope.**
+- [x] **Step 5: Run final verification:** `npm run check`, `npm run build`, `npm test`, `cargo test --manifest-path src-tauri/Cargo.toml`, and the desktop asset/package test. Record any environment-dependent build failures without claiming success.
+- [x] **Step 6: Review `git diff` and `git status`** to confirm user changes remain untouched and no generated binaries or unpinned external artifacts were added unintentionally.
+- [x] **Step 7: Commit** `test: verify desktop file type support`.
 
 ## Plan self-review
 

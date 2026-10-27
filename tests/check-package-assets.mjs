@@ -44,4 +44,15 @@ const html = fs.readFileSync(excalidrawIndex, "utf8");
 for (const [, asset] of html.matchAll(/(?:src|href)="\.\/([^\"]+)"/g)) {
   assert(fs.existsSync(path.join(excalidrawRoot, asset)), `Excalidraw bundle asset missing: ${asset}`);
 }
+
+// The desktop bundle configuration must map the offline diagram resources into
+// every packaged app, so the built output never fetches them at runtime.
+for (const config of ["src-tauri/tauri.conf.json", "src-tauri/tauri.windows.conf.json"]) {
+  const bundle = JSON.parse(fs.readFileSync(config, "utf8"));
+  const resources = bundle.bundle?.resources ?? {};
+  const values = typeof resources === "object" && !Array.isArray(resources) ? Object.keys(resources) : resources;
+  const mapped = JSON.stringify(values);
+  assert(mapped.includes("drawio/draw.war"), `${config} must bundle the pinned Draw.io archive`);
+  assert(mapped.includes("desktop-resources/excalidraw"), `${config} must bundle the Excalidraw app`);
+}
 console.log(`Package assets verified: ${excluded.toLocaleString()} bytes of reference CSS excluded; notices and offline diagram editors retained.`);
